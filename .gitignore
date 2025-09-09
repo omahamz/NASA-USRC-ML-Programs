@@ -1,1 +1,6 @@
 
+# Ignore test data directory
+/test_data/
+
+# Environment directories
+/.venv/
