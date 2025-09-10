@@ -5,7 +5,7 @@ Studying special structures that exhibit exceptional uni-axial energy absorption
 *Faculty Mentors:* Shiyao Lin
 *Selected:* 2025
 
-# Setup
+### Setup
 ```bash
 git clone 
 ```
