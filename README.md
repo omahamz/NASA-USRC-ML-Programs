@@ -20,4 +20,4 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Lastly, request 'test_data' from a researcher and copy it into the Parent directory
+Lastly, download 'test_data' from the NASA Drive and locate it in the Parent directory
