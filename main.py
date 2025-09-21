@@ -1,17 +1,31 @@
 import glob
 import re
 import matplotlib
+import random
 matplotlib.use("Qt5Agg")
 from matplotlib import pyplot as plt
 import numpy as np
+from scipy.integrate import simpson
 
-data_folder_directory = "test_data/KOSE" # Mutable
+data_folder_directory = "test_data/HexFiles" # Mutable
 angles_list, auc_list, cfe_list = [], [], []
-
-plt.figure()
+color_list = [ f"#{255:02x}{0:02x}{0:02x}", f"#{0:02x}{255:02x}{0:02x}", f"#{0:02x}{0:02x}{255:02x}" ]
 
 # Area Under Curve w Trapizoid method
-def auc_trapz(x, y, x_max=None):
+# def auc_simps(x, y, x_max=None):
+#     x, y = np.asarray(x), np.asarray(y)
+#     order = np.argsort(x)
+#     x, y = x[order], y[order]
+#     if x_max is not None:
+#         # clip to x_max (linear interpolate last point)
+#         if x_max < x[-1]:
+#             i = np.searchsorted(x, x_max)
+#             x_clip = np.concatenate([x[:i], [x_max]])
+#             y_clip = np.concatenate([y[:i],[np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
+#             x, y = x_clip, y_clip
+#     return np.trapz(y, x)
+
+def auc_simps(x, y, x_max=None):
     x, y = np.asarray(x), np.asarray(y)
     order = np.argsort(x)
     x, y = x[order], y[order]
@@ -22,7 +36,10 @@ def auc_trapz(x, y, x_max=None):
             x_clip = np.concatenate([x[:i], [x_max]])
             y_clip = np.concatenate([y[:i],[np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
             x, y = x_clip, y_clip
-    return np.trapz(y, x)
+    if len(x) % 2 != 0:
+        return simpson(y, x)
+    else:
+        return simpson(y[:-1], x[:-1]) + np.trapz(y[-2:], x[-2:])
 
 # Peak Force
 def find_peak(X):
@@ -32,12 +49,9 @@ def find_peak(X):
       x_max = x
   return x_max
 
-
-plt.figure(figsize=(10, 6)) # Added figure for clarity
-
 for file_path in glob.glob(data_folder_directory + "/*.txt"): # Only read txt
 
-  twist_angle = int(re.search(r"KOSE(\d+)", file_path).group(1)) # Mutable
+  twist_angle = int(re.search(r"HexTGV2_(\d+)", file_path).group(1)) # Mutable
   angles_list.append(twist_angle)
   X, Y = [], []
 
@@ -54,22 +68,21 @@ for file_path in glob.glob(data_folder_directory + "/*.txt"): # Only read txt
   cfe_list.append(median_force / peak_force)
 
   # Calculating AUC
-  auc = auc_trapz(X, Y)
+  auc = auc_simps(X, Y)
   auc_list.append(auc)
 
   # Plotting each grpah
-  g = int(np.clip(twist_angle * 7, 0, 255)) # map angle -> 0..255
-  graph_color = f'#{g:02x}{g:02x}{g:02x}'
-  plt.figure()
-  plt.plot(X, Y, '-', label=str(twist_angle), color=graph_color) # Color on a Grayscale
+  # plt.figure() # - Uncomment for non superimposed
+  plt.plot(X, Y, '-', label=str("control" if twist_angle == 0 else "V2"), color=color_list[twist_angle])
 
-  # Finalizing first plot
+# Finalizing first plot
   plt.xlabel("Displacement (mm)", )
   plt.ylabel("Force (N)")
-  plt.title(f"KOSH Twist Angle of {twist_angle} degrees")
+  plt.title(f"HEXV2  | Force vs Displacement")
   plt.grid(True)
-  plt.show()
 
+plt.legend()
+plt.show()
 # Creating secondary plot
 plt.figure()
 plt.plot(auc_list, cfe_list, "o")
@@ -83,3 +96,7 @@ for i in range(len(cfe_list)):
   plt.text(auc_list[i], cfe_list[i], str(angles_list[i]))
 
 plt.show()
+
+print(f"AUC:\n {auc_list}")
+print(f"CFE:\n {cfe_list}")
+
