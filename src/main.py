@@ -83,12 +83,12 @@ for file_path in glob.glob(data_directory + "/*.txt"): # Only read txt
 
   # Plotting each grpah
   # plt.figure() # - Uncomment for non superimposed
-  plt.plot(X, Y, '-', label=str("control" if twist_angle == 0 else "V2"), color=color_list[twist_angle])
+  plt.plot(X, Y, '-', label=str("Control" if twist_angle == 0 else "Hex"), color=color_list[twist_angle])
 
 # Finalizing first plot
   plt.xlabel("Displacement (mm)", )
-  plt.ylabel("Force (N)")
-  plt.title(f"HEXV2  | Force vs Displacement")
+  plt.ylabel(r"Normalized Force (F/$F_{peak}$)")
+  plt.title(f"{file_basename} | Force vs Displacement")
   plt.grid(True)
 
 plt.legend()
@@ -111,5 +111,5 @@ plt.show()
 print(f"AUC:\n {auc_list}")
 print(f"CFE:\n {cfe_list}")
 print(f"PF:\n {pf_list}")
-print(f"af:\n {af_list}")
+print(f"AF:\n {af_list}")
 
