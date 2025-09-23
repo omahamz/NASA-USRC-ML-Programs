@@ -7,25 +7,13 @@ from matplotlib import pyplot as plt
 import numpy as np
 from scipy.integrate import simpson
 
-data_folder_directory = "test_data/HexFiles" # Mutable
-angles_list, auc_list, cfe_list = [], [], []
+data_directory = "test_data/HexFiles" # Mutable
+file_basename = "HexTGV2"
+angles_list, auc_list, cfe_list, pf_list, mf_list = [], [], [], [], []
 color_list = [ f"#{255:02x}{0:02x}{0:02x}", f"#{0:02x}{255:02x}{0:02x}", f"#{0:02x}{0:02x}{255:02x}" ]
 
 # Area Under Curve w Trapizoid method
-# def auc_simps(x, y, x_max=None):
-#     x, y = np.asarray(x), np.asarray(y)
-#     order = np.argsort(x)
-#     x, y = x[order], y[order]
-#     if x_max is not None:
-#         # clip to x_max (linear interpolate last point)
-#         if x_max < x[-1]:
-#             i = np.searchsorted(x, x_max)
-#             x_clip = np.concatenate([x[:i], [x_max]])
-#             y_clip = np.concatenate([y[:i],[np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
-#             x, y = x_clip, y_clip
-#     return np.trapz(y, x)
-
-def auc_simps(x, y, x_max=None):
+def get_auc(x, y, x_max=None):
     x, y = np.asarray(x), np.asarray(y)
     order = np.argsort(x)
     x, y = x[order], y[order]
@@ -36,10 +24,27 @@ def auc_simps(x, y, x_max=None):
             x_clip = np.concatenate([x[:i], [x_max]])
             y_clip = np.concatenate([y[:i],[np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
             x, y = x_clip, y_clip
-    if len(x) % 2 != 0:
-        return simpson(y, x)
-    else:
-        return simpson(y[:-1], x[:-1]) + np.trapz(y[-2:], x[-2:])
+    return np.trapz(y, x)
+
+# Area Under Curve w Simpson's method
+# def get_auc(x, y, x_max=None):
+#     x, y = np.asarray(x), np.asarray(y)
+#     order = np.argsort(x)
+#     x, y = x[order], y[order]
+#     if x_max is not None:
+#         # clip to x_max (linear interpolate last point)
+#         if x_max < x[-1]:
+#             i = np.searchsorted(x, x_max)
+#             x_clip = np.concatenate([x[:i], [x_max]])
+#             y_clip = np.concatenate([y[:i],[np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
+#             x, y = x_clip, y_clip
+#     if len(x) % 2 == 0:
+#         # Add an extra point by estimating between the last two points
+#         x_extra = x[-1] + (x[-1] - x[-2])
+#         y_extra = y[-1] + (y[-1] - y[-2])
+#         x = np.append(x, x_extra)
+#         y = np.append(y, y_extra)
+#     return simpson(y, x)
 
 # Peak Force
 def find_peak(X):
@@ -49,9 +54,13 @@ def find_peak(X):
       x_max = x
   return x_max
 
-for file_path in glob.glob(data_folder_directory + "/*.txt"): # Only read txt
+# Mean Force
+def weighted_average(x, y):
+    return sum(xi * yi for xi, yi in zip(x, y)) / sum(x)
 
-  twist_angle = int(re.search(r"HexTGV2_(\d+)", file_path).group(1)) # Mutable
+for file_path in glob.glob(data_directory + "/*.txt"): # Only read txt
+
+  twist_angle = int(re.search(rf"{file_basename}_(\d+)", file_path).group(1)) # Mutable
   angles_list.append(twist_angle)
   X, Y = [], []
 
@@ -63,12 +72,18 @@ for file_path in glob.glob(data_folder_directory + "/*.txt"): # Only read txt
       Y.append(float(y))
 
   # Calculating CFE
-  median_force = sum(Y)/len(Y)
+  avg_force = weighted_average(X, Y)
+  mf_list.append(avg_force)
   peak_force = find_peak(Y)
-  cfe_list.append(median_force / peak_force)
+
+  # Normalize
+  Y = [y / peak_force for y in Y]
+
+  pf_list.append(peak_force)
+  cfe_list.append(avg_force / peak_force)
 
   # Calculating AUC
-  auc = auc_simps(X, Y)
+  auc = get_auc(X, Y)
   auc_list.append(auc)
 
   # Plotting each grpah
@@ -82,6 +97,7 @@ for file_path in glob.glob(data_folder_directory + "/*.txt"): # Only read txt
   plt.grid(True)
 
 plt.legend()
+plt.savefig(f"test_data/Graphs/{file_basename}_graph.png") # Mutable
 plt.show()
 # Creating secondary plot
 plt.figure()
@@ -99,4 +115,6 @@ plt.show()
 
 print(f"AUC:\n {auc_list}")
 print(f"CFE:\n {cfe_list}")
+print(f"PF:\n {pf_list}")
+print(f"MF:\n {mf_list}")
 
