@@ -9,7 +9,7 @@ from scipy.integrate import simpson
 
 data_directory = "test_data/HexFiles" # Mutable
 file_basename = "HexTGV2"
-angles_list, auc_list, cfe_list, pf_list, mf_list = [], [], [], [], []
+angles_list, auc_list, cfe_list, pf_list, af_list = [], [], [], [], []
 color_list = [ f"#{255:02x}{0:02x}{0:02x}", f"#{0:02x}{255:02x}{0:02x}", f"#{0:02x}{0:02x}{255:02x}" ]
 
 # Area Under Curve w Trapizoid method
@@ -54,10 +54,6 @@ def find_peak(X):
       x_max = x
   return x_max
 
-# Mean Force
-def weighted_average(x, y):
-    return sum(xi * yi for xi, yi in zip(x, y)) / sum(x)
-
 for file_path in glob.glob(data_directory + "/*.txt"): # Only read txt
 
   twist_angle = int(re.search(rf"{file_basename}_(\d+)", file_path).group(1)) # Mutable
@@ -71,20 +67,19 @@ for file_path in glob.glob(data_directory + "/*.txt"): # Only read txt
       X.append(float(x))
       Y.append(float(y))
 
-  # Calculating CFE
-  avg_force = weighted_average(X, Y)
-  mf_list.append(avg_force)
+  # Peak Force
   peak_force = find_peak(Y)
+  pf_list.append(peak_force)
+
+  # Calculating Values
+  auc = get_auc(X, Y)
+  auc_list.append(auc)
+  avg_force = auc / max(X)
+  af_list.append(avg_force)
+  cfe_list.append(avg_force / peak_force)
 
   # Normalize
   Y = [y / peak_force for y in Y]
-
-  pf_list.append(peak_force)
-  cfe_list.append(avg_force / peak_force)
-
-  # Calculating AUC
-  auc = get_auc(X, Y)
-  auc_list.append(auc)
 
   # Plotting each grpah
   # plt.figure() # - Uncomment for non superimposed
@@ -116,5 +111,5 @@ plt.show()
 print(f"AUC:\n {auc_list}")
 print(f"CFE:\n {cfe_list}")
 print(f"PF:\n {pf_list}")
-print(f"MF:\n {mf_list}")
+print(f"af:\n {af_list}")
 
