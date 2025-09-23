@@ -7,7 +7,7 @@ Studying special structures that exhibit exceptional uni-axial energy absorption
 
 ### Setup
 ```bash
-git clone 
+git clone https://github.com/omahamz/NASA-USRC-ML-Programs.git
 ```
 
 Re direct to the cloned directory
