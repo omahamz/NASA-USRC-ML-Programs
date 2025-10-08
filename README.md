@@ -5,6 +5,8 @@ Studying special structures that exhibit exceptional uni-axial energy absorption
 *Faculty Mentors:* Shiyao Lin
 *Selected:* 2025
 
+[https://www.nasa.gov/directorates/armd/tacp/ui/usrc/usrc-awards/](url)
+
 ### Setup
 ```bash
 git clone https://github.com/omahamz/NASA-USRC-ML-Programs.git
