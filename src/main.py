@@ -1,16 +1,61 @@
 import glob
 import re
+import matplotlib
+matplotlib.use("Qt5Agg")
+from matplotlib import pyplot as plt
 import numpy as np
+from scipy.integrate import simpson
 
-data_folder_directory = "test_data/KOSE" # Mutable
-angles_list, auc_list, cfe_list = [], [], []
+data_directory = "test_data/HexFiles" # Mutable
+file_basename = "HexTGV2"
+angles_list, auc_list, cfe_list, pf_list, af_list = [], [], [], [], []
+color_list = [ f"#{255:02x}{0:02x}{0:02x}", f"#{0:02x}{255:02x}{0:02x}", f"#{0:02x}{0:02x}{255:02x}" ]
 
-plt.figure()
+# Area Under Curve w Trapizoid method
+def get_auc(x, y, x_max=None):
+    x, y = np.asarray(x), np.asarray(y)
+    order = np.argsort(x)
+    x, y = x[order], y[order]
+    if x_max is not None:
+        # clip to x_max (linear interpolate last point)
+        if x_max < x[-1]:
+            i = np.searchsorted(x, x_max)
+            x_clip = np.concatenate([x[:i], [x_max]])
+            y_clip = np.concatenate([y[:i],[np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
+            x, y = x_clip, y_clip
+    return np.trapz(y, x)
 
+# Area Under Curve w Simpson's method
+# def get_auc(x, y, x_max=None):
+#     x, y = np.asarray(x), np.asarray(y)
+#     order = np.argsort(x)
+#     x, y = x[order], y[order]
+#     if x_max is not None:
+#         # clip to x_max (linear interpolate last point)
+#         if x_max < x[-1]:
+#             i = np.searchsorted(x, x_max)
+#             x_clip = np.concatenate([x[:i], [x_max]])
+#             y_clip = np.concatenate([y[:i],[np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
+#             x, y = x_clip, y_clip
+#     if len(x) % 2 == 0:
+#         # Add an extra point by estimating between the last two points
+#         x_extra = x[-1] + (x[-1] - x[-2])
+#         y_extra = y[-1] + (y[-1] - y[-2])
+#         x = np.append(x, x_extra)
+#         y = np.append(y, y_extra)
+#     return simpson(y, x)
 
-for file_path in glob.glob(data_folder_directory + "/*.txt"): # Only read txt
+# Peak Force
+def find_peak(X):
+  x_max = 0
+  for x in X:
+    if x > x_max:
+      x_max = x
+  return x_max
 
-  twist_angle = int(re.search(r"KOSE(\d+)", file_path).group(1)) # Mutable
+for file_path in glob.glob(data_directory + "/*.txt"): # Only read txt
+
+  twist_angle = int(re.search(rf"{file_basename}_(\d+)", file_path).group(1)) # Mutable
   angles_list.append(twist_angle)
   X, Y = [], []
 
