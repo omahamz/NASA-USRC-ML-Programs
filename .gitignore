@@ -1,6 +1,6 @@
 
 # Ignore test data directory
-/test_data/
+/data_folder/
 
 # Environment directories
 /.venv/
