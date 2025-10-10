@@ -1,103 +1,57 @@
+import os
 import glob
 import re
-import matplotlib
-matplotlib.use("Qt5Agg")
-from matplotlib import pyplot as plt
-import numpy as np
-from scipy.integrate import simpson
 
-data_directory = "test_data/HexFiles" # Mutable
-file_basename = "HexTGV2"
-angles_list, auc_list, cfe_list, pf_list, af_list = [], [], [], [], []
-color_list = [ f"#{255:02x}{0:02x}{0:02x}", f"#{0:02x}{255:02x}{0:02x}", f"#{0:02x}{0:02x}{255:02x}" ]
+# src imports
+import data
+import operations
 
-# Area Under Curve w Trapizoid method
-def get_auc(x, y, x_max=None):
-    x, y = np.asarray(x), np.asarray(y)
-    order = np.argsort(x)
-    x, y = x[order], y[order]
-    if x_max is not None:
-        # clip to x_max (linear interpolate last point)
-        if x_max < x[-1]:
-            i = np.searchsorted(x, x_max)
-            x_clip = np.concatenate([x[:i], [x_max]])
-            y_clip = np.concatenate([y[:i],[np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
-            x, y = x_clip, y_clip
-    return np.trapz(y, x)
+data_directory = os.path.join(os.path.dirname(__file__), '..', 'data_folder')
 
-# Area Under Curve w Simpson's method
-# def get_auc(x, y, x_max=None):
-#     x, y = np.asarray(x), np.asarray(y)
-#     order = np.argsort(x)
-#     x, y = x[order], y[order]
-#     if x_max is not None:
-#         # clip to x_max (linear interpolate last point)
-#         if x_max < x[-1]:
-#             i = np.searchsorted(x, x_max)
-#             x_clip = np.concatenate([x[:i], [x_max]])
-#             y_clip = np.concatenate([y[:i],[np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
-#             x, y = x_clip, y_clip
-#     if len(x) % 2 == 0:
-#         # Add an extra point by estimating between the last two points
-#         x_extra = x[-1] + (x[-1] - x[-2])
-#         y_extra = y[-1] + (y[-1] - y[-2])
-#         x = np.append(x, x_extra)
-#         y = np.append(y, y_extra)
-#     return simpson(y, x)
+def main():
 
-# Peak Force
-def find_peak(X):
-  x_max = 0
-  for x in X:
-    if x > x_max:
-      x_max = x
-  return x_max
+  material_name = "KOSE"
+  sub_directory = os.path.join(data_directory, "1_param", material_name)
+  axis_names = ["Displacement", "Force"] 
 
-for file_path in glob.glob(data_directory + "/*.txt"): # Only read txt
+  data.DataInterface.wipe_temp()
 
-  twist_angle = int(re.search(rf"{file_basename}_(\d+)", file_path).group(1)) # Mutable
-  angles_list.append(twist_angle)
-  X, Y = [], []
+  ### Process F vs. D ###
+  data_frames = []
+  param_values = []
 
-  # Creating X & Y
-  with open(file_path) as f:
-    for line in f:
-      x, y = re.split(r" +", line.strip()) # Mutable
-      X.append(float(x))
-      Y.append(float(y))
+  # Process each file in the sub_directory
+  for file_path in os.listdir(sub_directory):
+    file_path = os.path.join(sub_directory, file_path)
 
-  # Calculating CFE
-  median_force = sum(Y)/len(Y)
-  peak_force = find_peak(Y)
-  cfe_list.append(median_force / peak_force)
+    print(file_path)
+    with open(file_path, 'r'):
+      if file_path.endswith('.txt'):
+        processed_data = data.DataInterface.process_data(file_path, axis_names)
+        data_frames.append(processed_data)
+        param_values.append(int(re.search(rf"{material_name}_(\d+)", file_path).group(1))) # Extract param value from filename
+    
+  data.DataInterface.display_graph(data_frames, 
+    json_path=f"{sub_directory}/{material_name}_params.json", 
+    params=param_values, 
+    save_file=False, 
+    args = {"xlabel": "Displacement (mm)", "ylabel": "Force (N)", "grid": True})
 
-  # Calculating AUC
-  auc = auc_trapz(X, Y)
-  auc_list.append(auc)
+  ### Process AUC vs CFE ###
+  for file_path in os.listdir(sub_directory):
+    file_path = os.path.join(sub_directory, file_path)
 
-  # Plotting each grpah
-  g = int(np.clip(twist_angle * 7, 0, 255)) # map angle -> 0..255
-  graph_color = f'#{g:02x}{g:02x}{g:02x}'
-  plt.figure()
-  plt.plot(X, Y, '-', label=str(twist_angle), color=graph_color) # Color on a Grayscale
+    with open(file_path, 'r'):
+      if file_path.endswith('.txt'):
+        processed_data = data.DataInterface.process_data(file_path, axis_names)
+        auc = operations.OperationsInterface.auc_trapz(processed_data, x_col="Displacement", y_col="Force", x_max=6.0)
+        cfe = operations.OperationsInterface.cfe(processed_data["Force"].tolist())
+        param_value = int(re.search(rf"{material_name}_(\d+)", file_path).group(1))
+        print("-"*30)
+        print(f"{material_name}_{param_value}, AUC: {round(auc, 2)}, CFE: {round(cfe, 2)}")
+        print("-"*30)
 
-  # Finalizing first plot
-  plt.xlabel("Displacement (mm)", )
-  plt.ylabel("Force (N)")
-  plt.title(f"KOSH Twist Angle of {twist_angle} degrees")
-  plt.grid(True)
-  plt.show()
 
-# Creating secondary plot
-plt.figure()
-plt.plot(auc_list, cfe_list, "o")
-plt.xlabel("AUC (Nmm)")
-plt.ylabel("CFE")
-plt.ylim(0, 1) # Mutable
-plt.title("Crushing Force Efficiency vs Area Under Curve (Nmm)")
-plt.grid(True)
+if __name__ == "__main__":
+  main()
 
-for i in range(len(cfe_list)):
-  plt.text(auc_list[i], cfe_list[i], str(angles_list[i]))
-
-plt.show()

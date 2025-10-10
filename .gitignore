@@ -4,3 +4,6 @@
 
 # Environment directories
 /.venv/
+
+# Ignore Python cache files
+/src/__pycache__/

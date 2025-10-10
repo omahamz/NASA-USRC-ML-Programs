@@ -1,57 +1,128 @@
 import os
+import shutil
 import json
 import matplotlib
 matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 class DataInterface:
 
-    data_directory: str = os.path.join(os.path.dirname(__file__), '..', 'data_folder')
+    data_directory = os.path.join(os.path.dirname(__file__), '..', 'data_folder')
 
     @staticmethod
-    def process_data(data_path : str) -> list: # pandas DataFrame list
+    def wipe_temp() -> None:
+        """
+        Deletes all files and subdirectories inside the given folder.
+        The folder itself is preserved.
+        """
+        folder_path = os.path.join(DataInterface.data_directory, 'output', 'temp')
+        if not os.path.exists(folder_path):
+            print(f"Folder not found: {folder_path}")
+            return
+
+        for filename in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, filename)
+            try:
+                if os.path.isfile(file_path) or os.path.islink(file_path):
+                    os.remove(file_path)       # remove file or symlink
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path)   # remove directory recursively
+            except Exception as e:
+                print(f"Error deleting {file_path}: {e}")
+    
+    @staticmethod
+    def save_temp() -> None:
+        """
+        Moves all files from the 'temp' output directory to the 'saves' output directory.
+        If 'saves' does not exist, it will be created.
+        Existing files with the same name will be overwritten.
+        """
+        temp_dir = os.path.join(DataInterface.data_directory, 'output', 'temp')
+        save_dir = os.path.join(DataInterface.data_directory, 'output', 'saves')
+
+        # Ensure both directories exist
+        if not os.path.exists(temp_dir):
+            print(f"Temp folder not found: {temp_dir}")
+            return
+        os.makedirs(save_dir, exist_ok=True)
+
+        moved_files = 0
+        for filename in os.listdir(temp_dir):
+            src_path = os.path.join(temp_dir, filename)
+            dst_path = os.path.join(save_dir, filename)
+            try:
+                # Move file (will overwrite if already exists)
+                shutil.move(src_path, dst_path)
+                moved_files += 1
+            except Exception as e:
+                print(f"Error moving {filename}: {e}")
+
+        print(f"Moved {moved_files} file(s) from temp → saves.")
+
+
+    @staticmethod
+    def process_data(data_path : str, axis_names: list) -> pd.DataFrame: # pandas DataFrame
         """
         Reads a whitespace-delimited text file and returns a list of DataFrames.
         Each DataFrame corresponds to a separate dataset in the file.
         """
-        data_frames = []
-        with open(data_path, 'r') as f:
-            df = pd.read_csv(f, delim_whitespace=True, header=None)
-            data_frames.append(df)
-        return data_frames
+        with open(data_path, 'r') as file:
+            df = pd.read_csv(file, sep='\s+', header=None, names=axis_names)
+            return df
 
-    def is_DF_list(data: list) -> bool:
-        return isinstance(data, list) and all(isinstance(df, pd.DataFrame) for df in data)
-
-    # Can display single or multiple graphs (list of DataFrames or list of list of DataFrames)
+    # Can display single or multiple graphs superimposed (list of DataFrames or list of list of DataFrames)
     @staticmethod
-    def display_graph(data : list, json_path: str, save_file : bool = False) -> None:
-        is_DF_list: bool = is_DF_list(data)
-        if not is_DF_list:
-            is_DF_2Dlist = isinstance(data, list) and all(is_DF_list(sublist) for sublist in data)
-        if not (is_DF_list or is_DF_2Dlist):
+    def display_graph(data, json_path: str, params: list, save_file: bool = False, args: dict | None = None) -> None:
+        import json, os
+        import numpy as np
+        import matplotlib.pyplot as plt
+        import pandas as pd
+
+        args = args or {}
+        xlabel = args.pop("xlabel", None)
+        ylabel = args.pop("ylabel", None)
+        want_grid = bool(args.pop("grid", False))
+
+        is_df = isinstance(data, pd.DataFrame)
+        is_list = isinstance(data, list) and all(isinstance(df, pd.DataFrame) for df in data)
+        if not (is_df or is_list):
             raise ValueError("Data must be a DataFrame or list of DataFrames.")
-        
-        config: any = {}
+
         with open(json_path, 'r') as f:
             config = json.load(f)
+        title_base = config.get("name", "Unnamed")
 
-        if is_DF_list:
-            data.plot(title=f"{config.get("name", "Unnamed Plot")}: Force vs Displacement", xlabel="Displacement (mm)", ylabel="Force (N)")
-        elif is_DF_2Dlist:
-            n: int = config["n"]
+        plt.close('all')
+        fig, ax = plt.subplots()
+
+        if is_df:
+            X, Y = data.columns[0], data.columns[1]
+            ax.plot(data[X].values, data[Y].values, **args)
+            title = f"{title_base}: {Y} vs {X}"
+        else:
+            # one label for the whole param set
+            label = " | ".join(f"{k}:{v}" for k, v in zip(config["params"], params))
+            n = len(data)
             for i in range(n):
-                data[i].plot(title=f"{config.get("name", "Unnamed Plot")}: Force vs Displacement", xlabel="Displacement (mm)", ylabel="Force (N)", label= " | ".join([config["params"][i] for i in range(n)]))
-    
-        plt.savefig(f"{DataInterface.data_directory}output/{'saves' if save_file else 'temp'}/{data.Name}.png")
-        plt.show()
-        plt.clf()
+                df = data[i]
+                X, Y = df.columns[0], df.columns[1]
+                color = np.random.rand(3,)
+                label = " | ".join( config["params"][j]+" = "+str(params[i]) for j in range(config["n"]) )
+                ax.plot(df[X].values, df[Y].values, label=label, color=color, **args)
+            ax.legend()
+            title = f"{title_base}: {Y} vs {X}"
 
-        plt.figure()
-plt.plot(auc_list, cfe_list, "o")
-plt.xlabel("AUC (Nmm)")
-plt.ylabel("CFE")
-plt.ylim(0, 1) # Mutable
-plt.title("Crushing Force Efficiency vs Area Under Curve (Nmm)")
-plt.grid(True)
+        ax.set_title(title)
+        ax.set_xlabel(xlabel or X)
+        ax.set_ylabel(ylabel or Y)
+        if want_grid:
+            ax.grid(True)
+
+        out_dir = os.path.join(DataInterface.data_directory, 'output', 'saves' if save_file else 'temp')
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"{title_base}_{params}.png")
+        fig.savefig(out_path, bbox_inches='tight')
+        plt.show()
+        plt.close(fig)

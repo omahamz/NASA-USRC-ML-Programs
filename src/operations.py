@@ -4,16 +4,22 @@ from scipy.integrate import simpson
 class OperationsInterface:
 
     @staticmethod
-    def find_peak(X) -> float:
-        x_max = 0
-        for x in X:
-            if x > x_max:
-                x_max = x
-        return x_max
+    def max(X: list) -> float:
+        return max(X) if len(X) > 0 else 0.0
+    
+    @staticmethod
+    def cfe(X: list) -> float:
+        if not X:
+            return 0.0
+        x_max = OperationsInterface.max(X)
+        if x_max == 0:
+            return 0.0
+        return np.median(X) / x_max
 
     @staticmethod
-    def auc_trapz(x, y, x_max=None) -> float:
-        x, y = np.asarray(x), np.asarray(y)
+    def auc_trapz(df: list, x_col: str ="Displacement", y_col: str="Force", x_max=None) -> float:
+        x = df[x_col].values
+        y = df[y_col].values
         order = np.argsort(x)
         x, y = x[order], y[order]
         if x_max is not None:
@@ -21,12 +27,12 @@ class OperationsInterface:
             if x_max < x[-1]:
                 i = np.searchsorted(x, x_max)
                 x_clip = np.concatenate([x[:i], [x_max]])
-                y_clip = np.concatenate([y[:i],[np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
+                y_clip = np.concatenate([y[:i], [np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
                 x, y = x_clip, y_clip
-        return np.trapezoid(y, x)
+        return np.trapz(y, x)
 
     @staticmethod
-    def auc_simps(df, x_col, y_col, x_max=None) -> float:
+    def auc_simps(df: list, x_col: str ="Displacement", y_col: str="Force", x_max=None) -> float:
         x = df[x_col].values
         y = df[y_col].values
         order = np.argsort(x)
