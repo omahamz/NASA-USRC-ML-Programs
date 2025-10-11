@@ -1,6 +1,6 @@
 # 3rd Party Libraries
 import numpy as np
-from scipy.integrate import simpson
+import scipy.integrate as scipy
 
 # Internal Libraries
 from enum import Enum
@@ -37,7 +37,7 @@ class OperationsInterface:
                 x_clip = np.concatenate([x[:i], [x_max]])
                 y_clip = np.concatenate([y[:i], [np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
                 x, y = x_clip, y_clip
-        return np.trapz(y, x)
+        return scipy.trapezoid(y, x)
 
     @staticmethod
     def auc_simps(df: list, x_col: str ="Displacement", y_col: str="Force", x_max=None) -> float:
@@ -51,4 +51,4 @@ class OperationsInterface:
                 x_clip = np.concatenate([x[:i], [x_max]])
                 y_clip = np.concatenate([y[:i], [np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
                 x, y = x_clip, y_clip
-        return simpson(y, x)
+        return scipy.simpsons(y, x)
