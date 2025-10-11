@@ -1,7 +1,15 @@
+# 3rd Party Libraries
 import numpy as np
 from scipy.integrate import simpson
 
+# Internal Libraries
+from enum import Enum
+
 class OperationsInterface:
+
+    class Mode(Enum):
+        FvD = 0
+        AvC = 1
 
     @staticmethod
     def max(X: list) -> float:

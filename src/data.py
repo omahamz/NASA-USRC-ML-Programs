@@ -1,11 +1,17 @@
+# Standard Libary
 import os
 import shutil
 import json
+
+# 3rd Party Libraries
 import matplotlib
 matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+# src imports
+from operations import OperationsInterface as OI
 
 class DataInterface:
 
@@ -63,24 +69,23 @@ class DataInterface:
 
 
     @staticmethod
-    def process_data(data_path : str, axis_names: list) -> pd.DataFrame: # pandas DataFrame
-        """
-        Reads a whitespace-delimited text file and returns a list of DataFrames.
-        Each DataFrame corresponds to a separate dataset in the file.
-        """
-        with open(data_path, 'r') as file:
-            df = pd.read_csv(file, sep='\s+', header=None, names=axis_names)
-            return df
+    def process_data(data_path: str | None = None, data_list: list | None = None, col_names: list[str] | None = None) -> pd.DataFrame:
+        if (data_path is None) == (data_list is None):
+            raise ValueError("Provide exactly one of data_path or data_list.")
+        col_names = col_names or []
+
+        if data_path is not None:
+            return pd.read_csv(data_path, sep=r"\s+", header=None, names=col_names)
+        else:
+            return pd.DataFrame(data_list, columns=col_names or None)
+
 
     # Can display single or multiple graphs superimposed (list of DataFrames or list of list of DataFrames)
     @staticmethod
-    def display_graph(data, json_path: str, params: list, save_file: bool = False, args: dict | None = None) -> None:
-        import json, os
-        import numpy as np
-        import matplotlib.pyplot as plt
-        import pandas as pd
-
-        args = args or {}
+    def display_graph(mode: OI.Mode, data: pd.DataFrame | list, *, json_path: str, params: list, save_file: bool = False, args: dict = {}) -> None:
+        """
+        Displays a graph based on the provided data and configuration.
+        """
         xlabel = args.pop("xlabel", None)
         ylabel = args.pop("ylabel", None)
         want_grid = bool(args.pop("grid", False))
@@ -100,7 +105,13 @@ class DataInterface:
         if is_df:
             X, Y = data.columns[0], data.columns[1]
             ax.plot(data[X].values, data[Y].values, **args)
-            title = f"{title_base}: {Y} vs {X}"
+            if mode == OI.Mode.FvD:
+                title = f"{title_base}: {Y} vs {X}"
+            elif mode == OI.Mode.AvC:
+                title = f"{title_base}: AUC vs CFE"
+                # Labeling eachpoint
+                for x_val, y_val, param in zip(data[X].values, data[Y].values, params):
+                    ax.annotate(f"{param}", (x_val, y_val), textcoords="offset points", xytext=(10,0), ha='center')
         else:
             # one label for the whole param set
             label = " | ".join(f"{k}:{v}" for k, v in zip(config["params"], params))
@@ -122,7 +133,8 @@ class DataInterface:
 
         out_dir = os.path.join(DataInterface.data_directory, 'output', 'saves' if save_file else 'temp')
         os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, f"{title_base}_{params}.png")
+        out_path = os.path.join(out_dir, f"{title_base}_{str(mode).split('.')[1]}.png")
         fig.savefig(out_path, bbox_inches='tight')
         plt.show()
         plt.close(fig)
+
