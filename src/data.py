@@ -105,10 +105,8 @@ class DataInterface:
         if is_df:
             X, Y = data.columns[0], data.columns[1]
             ax.plot(data[X].values, data[Y].values, **args)
-            if mode == OI.Mode.FvD:
-                title = f"{title_base}: {Y} vs {X}"
-            elif mode == OI.Mode.AvC:
-                title = f"{title_base}: AUC vs CFE"
+            title = f"{title_base}: {Y} vs {X}"
+            if mode == OI.Mode.AvC:
                 # Labeling eachpoint
                 for x_val, y_val, param in zip(data[X].values, data[Y].values, params):
                     ax.annotate(f"{param}", (x_val, y_val), textcoords="offset points", xytext=(10,0), ha='center')
