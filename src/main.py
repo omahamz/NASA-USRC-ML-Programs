@@ -29,8 +29,8 @@ def main():
       processed_data = DI.process_data(data_path=file_path, col_names=["Displacement", "Force"] )
       data_frames[OI.Mode.FvD].append(processed_data)
       ### AUC and CFE ###
-      auc = OI.auc_trapz(processed_data, x_col="Displacement", y_col="Force", x_max=6.0)
-      cfe = OI.cfe(processed_data["Force"].tolist())
+      auc = OI.auc_trapz(processed_data, x_col="Displacement", y_col="Force")
+      cfe = OI.cfe(processed_data)
       data_frames[OI.Mode.AvC].append([auc, cfe])
 
   ### F vs. D ###
@@ -39,7 +39,9 @@ def main():
     json_path=f"{sub_directory}/{material_name}_params.json", 
     params=param_values, 
     save_file=True, 
-    args = {"xlabel": "Displacement (mm)", "ylabel": "Force (N)", "grid": True})
+    args = {"xlabel": "Displacement (mm)", 
+            "ylabel": "Force (N)", 
+            "grid": True,})
   ### AUC and CFE ###
   processed_data = DI.process_data(data_list=data_frames[OI.Mode.AvC], col_names=["AUC", "CFE"])
   data_frames[OI.Mode.AvC] = processed_data
@@ -48,7 +50,10 @@ def main():
     json_path=f"{sub_directory}/{material_name}_params.json", 
     params=param_values, 
     save_file=True, 
-    args = {"xlabel": "Area Under Curve (Nmm)", "ylabel": "Crushing Force Efficiency", "grid": True, "marker": "o", "linestyle": "--"})
+    args = {"xlabel": "Area Under Curve (Nmm)", 
+            "ylabel": "Crushing Force Efficiency", 
+            "grid": True, "marker": "o", 
+            "linestyle": "--",})
 
 if __name__ == "__main__":
   main()
