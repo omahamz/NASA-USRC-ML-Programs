@@ -1,6 +1,7 @@
 # 3rd Party Libraries
 import numpy as np
-import scipy.integrate as scipy
+import scipy.integrate
+import pandas as pd
 
 # Internal Libraries
 from enum import Enum
@@ -12,59 +13,103 @@ class OperationsInterface:
         AvC = 1
 
     @staticmethod
-    def cfe(X: list) -> float:
-        if not X:
+    def cfe(df) -> float:
+        if df.shape[0] < 2:
             return 0.0
-        x_max = max(X)
-        if x_max == 0:
-            return 0.0
-        return float(np.median(X) / x_max)
+        
+        # Extract columns and handle finite values
+        x = df.iloc[:, 0].to_numpy(dtype=float)
+        y = df.iloc[:, 1].to_numpy(dtype=float)
 
-    @staticmethod
-    def _prep_xy(df: list, x_col: str, y_col: str):
-        d = df[[x_col, y_col]].dropna()
-        if d.shape[0] < 2:
-            return None, None
-        x = d[x_col].to_numpy(dtype=float, copy=False)
-        y = d[y_col].to_numpy(dtype=float, copy=False)
+        m = np.isfinite(x) & np.isfinite(y)
+        x, y = x[m], y[m]
+        if x.size < 2:
+            return 0.0
+
+        # Sort by x
         order = np.argsort(x)
-        return x[order], y[order]
+        x, y = x[order], y[order]
 
-    @staticmethod
-    def _clip_to_xmax(x: np.ndarray, y: np.ndarray, x_max: float):
-        if x_max <= x[0]:
-            return None, None  # area is 0 up to x_max
-        if x_max >= x[-1]:
-            return x, y        # no clipping needed
-
-        i = np.searchsorted(x, x_max, side="left")
-        # exact match
-        if x[i] == x_max:
-            return x[:i+1], y[:i+1]
-        # i could be 0 only if x_max < x[0], which we handled above
-        x_clip = np.concatenate([x[:i], [x_max]])
-        y_clip = np.concatenate([y[:i], [np.interp(x_max, x[i-1:i+1], y[i-1:i+1])]])
-        return x_clip, y_clip
-
-    @staticmethod
-    def auc_trapz(df: list, x_col: str = "Displacement", y_col: str = "Force", x_max=None) -> float:
-        x, y = OperationsInterface._prep_xy(df, x_col, y_col)
-        if x is None:
+        # Voronoi-style dx weights per point
+        w = np.empty_like(x, dtype=float)
+        if x.size == 2:
+            w[:] = (x[1] - x[0]) / 2.0
+        else:
+            w[0] = (x[1] - x[0]) / 2.0
+            w[1:-1] = (x[2:] - x[:-2]) / 2.0
+            w[-1] = (x[-1] - x[-2]) / 2.0
+        
+        w = np.clip(w, 0.0, None)
+        if w.sum() == 0:
             return 0.0
-        if x_max is not None:
-            x, y = OperationsInterface._clip_to_xmax(x, y, float(x_max))
-            if x is None:
-                return 0.0
-        return float(scipy.trapezoid(y, x))
+
+        # Weighted median of y
+        idx = np.argsort(y)
+        y_s, w_s = y[idx], w[idx]
+        cdf = np.cumsum(w_s) / w_s.sum()
+        y_wmed = y_s[np.searchsorted(cdf, 0.5)]
+
+        y_max = np.max(y)
+        if y_max == 0:
+            return 0.0
+        
+        return y_wmed / y_max
+    
+    # OLD VERSION, is instead weighted mean
+    # def cfe(df) -> float:
+    #     # Expect dataframe with two columns: X and Y
+    #     if df.shape[0] < 2:
+    #         return 0.0
+        
+    #     x = df.iloc[:, 0].to_numpy(dtype=float)
+    #     y = df.iloc[:, 1].to_numpy(dtype=float)
+        
+    #     # Sort in case x is unordered
+    #     order = np.argsort(x)
+    #     x, y = x[order], y[order]
+
+    #     # Compute weighted mean using trapezoidal integration
+    #     # (y[i] + y[i+1]) / 2 * (x[i+1] - x[i])
+    #     auc = np.trapz(y, x)
+    #     mean_y = auc / (x[-1] - x[0])
+
+    #     y_max = np.max(y)
+    #     if y_max == 0:
+    #         return 0.0
+    #     return mean_y / y_max
 
     @staticmethod
-    def auc_simps(df: list, x_col: str = "Displacement", y_col: str = "Force", x_max=None) -> float:
-        x, y = OperationsInterface._prep_xy(df, x_col, y_col)
-        if x is None:
+    def auc_trapz(df, x_col: str, y_col: str) -> float:
+        # Input validation
+        if df.empty or x_col not in df.columns or y_col not in df.columns:
             return 0.0
-        if x_max is not None:
-            x, y = OperationsInterface._clip_to_xmax(x, y, float(x_max))
-            if x is None:
-                return 0.0
-        # Simpson needs >= 2 points; SciPy handles nonuniform spacing.
-        return float(scipy.simpson(y, x))
+        
+        x = df[x_col].to_numpy()
+        y = df[y_col].to_numpy()
+        
+        # Handle finite values only
+        mask = np.isfinite(x) & np.isfinite(y)
+        x = x[mask]
+        y = y[mask]
+        
+        # Need at least 2 points for trapezoid integration
+        if len(x) < 2:
+            return 0.0
+        
+        # Sort by x-values (important for proper integration)
+        sort_idx = np.argsort(x)
+        x_sorted = x[sort_idx]
+        y_sorted = y[sort_idx]
+        
+        # Calculate area using trapezoid rule
+        try:
+            area = float(scipy.integrate.trapezoid(y_sorted, x_sorted))
+            return area
+        except (ValueError, TypeError):
+            return 0.0
+        
+    # OLD VERSION, does not handle unsorted or NaN values
+    # def auc_trapz(df, x_col: str, y_col: str) -> float:
+    #     x = df[x_col]
+    #     y = df[y_col]
+    #     return float(scipy.trapezoid(y, x))
