@@ -107,9 +107,10 @@ class DataInterface:
             ax.plot(data[X].values, data[Y].values, **args)
             title = f"{title_base}: {Y} vs {X}"
             if mode == OI.Mode.AvC:
+                ax.set_ylim(top=1)
                 # Labeling eachpoint
                 for x_val, y_val, param in zip(data[X].values, data[Y].values, params):
-                    ax.annotate(f"{param}", (x_val, y_val), textcoords="offset points", xytext=(10,0), ha='center')
+                    ax.annotate(f"{param}", (x_val, y_val), textcoords="offset points", xytext=(0, 10), ha='center')
         else:
             # one label for the whole param set
             label = " | ".join(f"{k}:{v}" for k, v in zip(config["params"], params))
@@ -126,6 +127,8 @@ class DataInterface:
         ax.set_title(title)
         ax.set_xlabel(xlabel or X)
         ax.set_ylabel(ylabel or Y)
+        ax.set_ylim(bottom=0)
+    
         if want_grid:
             ax.grid(True)
 
