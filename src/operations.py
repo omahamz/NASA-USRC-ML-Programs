@@ -13,7 +13,7 @@ class OperationsInterface:
         AvC = 1
 
     @staticmethod
-    def cfe(df) -> float:
+    def cfe_median(df) -> float:
         if df.shape[0] < 2:
             return 0.0
         
@@ -56,27 +56,28 @@ class OperationsInterface:
         return y_wmed / y_max
     
     # OLD VERSION, is instead weighted mean
-    # def cfe(df) -> float:
-    #     # Expect dataframe with two columns: X and Y
-    #     if df.shape[0] < 2:
-    #         return 0.0
+    @staticmethod
+    def cfe_mean(df) -> float:
+        # Expect dataframe with two columns: X and Y
+        if df.shape[0] < 2:
+            return 0.0
         
-    #     x = df.iloc[:, 0].to_numpy(dtype=float)
-    #     y = df.iloc[:, 1].to_numpy(dtype=float)
+        x = df.iloc[:, 0].to_numpy(dtype=float)
+        y = df.iloc[:, 1].to_numpy(dtype=float)
         
-    #     # Sort in case x is unordered
-    #     order = np.argsort(x)
-    #     x, y = x[order], y[order]
+        # Sort in case x is unordered
+        order = np.argsort(x)
+        x, y = x[order], y[order]
 
-    #     # Compute weighted mean using trapezoidal integration
-    #     # (y[i] + y[i+1]) / 2 * (x[i+1] - x[i])
-    #     auc = np.trapz(y, x)
-    #     mean_y = auc / (x[-1] - x[0])
+        # Compute weighted mean using trapezoidal integration
+        # (y[i] + y[i+1]) / 2 * (x[i+1] - x[i])
+        auc = scipy.integrate.trapezoid(y, x)
+        mean_y = auc / (x[-1] - x[0])
 
-    #     y_max = np.max(y)
-    #     if y_max == 0:
-    #         return 0.0
-    #     return mean_y / y_max
+        y_max = np.max(y)
+        if y_max == 0:
+            return 0.0
+        return mean_y / y_max
 
     @staticmethod
     def auc_trapz(df, x_col: str, y_col: str) -> float:

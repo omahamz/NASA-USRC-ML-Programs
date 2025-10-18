@@ -82,6 +82,11 @@ class DataInterface:
 
     # Can display single or multiple graphs superimposed (list of DataFrames or list of list of DataFrames)
     @staticmethod
+
+    # TODO:
+    # Create TWO args passes one with optional feautres (ex: custom color)
+    # Another with standard matplotlib features (ex: xlabel, ylabel, grid)
+    # ^ Which will be used to easily unpack using **args
     def display_graph(mode: OI.Mode, data: pd.DataFrame | list, *, json_path: str, params: list, save_file: bool = False, args: dict = {}) -> None:
         """
         Displays a graph based on the provided data and configuration.
@@ -118,8 +123,11 @@ class DataInterface:
             for i in range(n):
                 df = data[i]
                 X, Y = df.columns[0], df.columns[1]
-                color = np.random.rand(3,)
-                label = " | ".join( config["params"][j]+" = "+str(params[i]) for j in range(config["n"]) )
+                
+                # color = np.random.rand(3,)
+                color = (plt.cm.Reds((i + 1) / n) if mode == OI.Mode.FvD else plt.cm.Blues(i + 1 / n))
+
+                label = " | ".join( config["params"][j]+": "+str(params[i]) for j in range(config["n"]) )
                 ax.plot(df[X].values, df[Y].values, label=label, color=color, **args)
             ax.legend()
             title = f"{title_base}: {Y} vs {X}"

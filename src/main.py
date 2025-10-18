@@ -24,13 +24,15 @@ def main():
     file_path = os.path.join(sub_directory, file_path)
 
     if file_path.endswith('.txt'):
-      param_values.append(int(re.search(rf"{material_name}_(\d+)", file_path).group(1))) # Extract param value from filename
+      matches = re.search(rf"{material_name}_(.+)\.txt", file_path) # Extract params from filename
+      if matches:
+        param_values.extend(matches.group(1).split('_'))
       ### F vs. D ###
       processed_data = DI.process_data(data_path=file_path, col_names=["Displacement", "Force"] )
       data_frames[OI.Mode.FvD].append(processed_data)
       ### AUC and CFE ###
       auc = OI.auc_trapz(processed_data, x_col="Displacement", y_col="Force")
-      cfe = OI.cfe(processed_data)
+      cfe = OI.cfe_mean(processed_data)
       data_frames[OI.Mode.AvC].append([auc, cfe])
 
   ### F vs. D ###
@@ -54,6 +56,8 @@ def main():
             "ylabel": "Crushing Force Efficiency", 
             "grid": True, "marker": "o", 
             "linestyle": "--",})
+  print(f"{material_name}:")
+  print(data_frames[OI.Mode.AvC])
 
 if __name__ == "__main__":
   main()
