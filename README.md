@@ -1,14 +1,14 @@
-# NASA USRC — Multi-Fidelity ML Surrogate Models
+# NASA USRC | Multi-Fidelity ML Surrogate Models
 
 Machine learning surrogate models for crashworthiness prediction of thin-walled
 energy-absorbing structures, developed as part of NASA's University Student
 Research Challenge (USRC).
 
-Two surrogate models — a **Multi-Layer Perceptron (MLP)** and a **Multi-Output
-Gaussian Process (GP)** — are trained to predict:
+Two surrogate models, a **Multi-Layer Perceptron (MLP)** and a **Multi-Output
+Gaussian Process (GP)**, are trained to predict:
 
-- **SEA** — Specific Energy Absorption (higher is better)
-- **CFE** — Crushing Force Efficiency (closer to 1 is better)
+- **SEA**, Specific Energy Absorption (higher is better)
+- **CFE**, Crushing Force Efficiency (closer to 1 is better)
 
 from four structural design parameters:
 
@@ -48,7 +48,7 @@ and to drive design-space exploration and optimization.
 │   ├── optimizer.py        # Design optimization over the surrogates
 │   ├── analysis.py         # Data analysis utilities
 │   ├── visualizer.py       # Plotting tools
-│   ├── src_data/           # Sobol sample designs (inputs only — tracked)
+│   ├── src_data/           # Sobol sample designs (inputs only, tracked)
 │   └── ml_models/
 │       ├── data_loader.py  # Dataset loading, scaling, LF/HF splits
 │       ├── mlp_model.py    # MLP architecture
@@ -95,11 +95,11 @@ metrics, and plots) are written to `models/` locally.
 `src/sample.py` generates Sobol sample designs subject to the geometric
 manufacturability constraints of the structure (which eliminate roughly 65% of
 the raw input space). Generated designs and their sampler state live in
-`src/src_data/` — these contain input coordinates only, no simulation results.
+`src/src_data/`, these contain input coordinates only, no simulation results.
 
 ## Documentation
 
-- [ML_PLAN.md](ML_PLAN.md) — end-to-end modeling plan and rationale
-- [docs/MLP_DESIGN.md](docs/MLP_DESIGN.md) — MLP architecture and training design
-- [docs/GP_DESIGN.md](docs/GP_DESIGN.md) — GP design, kernels, and acquisition
-- [docs/USAGE.md](docs/USAGE.md) — practical usage guide
+- [ML_PLAN.md](ML_PLAN.md), end-to-end modeling plan and rationale
+- [docs/MLP_DESIGN.md](docs/MLP_DESIGN.md), MLP architecture and training design
+- [docs/GP_DESIGN.md](docs/GP_DESIGN.md), GP design, kernels, and acquisition
+- [docs/USAGE.md](docs/USAGE.md), practical usage guide
