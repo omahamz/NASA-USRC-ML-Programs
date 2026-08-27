@@ -1,9 +1,39 @@
+# ─── Confidential data — never commit ───────────────────────────────
+# Raw simulation data (force–displacement files, LF/HF datasets)
+data_folder/
+other/
 
-# Ignore test data directory
-/data_folder/
+# Trained model artifacts — GP pickles embed their full training data,
+# scalers.pkl encodes dataset statistics, and the plots display real
+# SEA/CFE values. None of it may leave the machine.
+models/
 
-# Environment directories
-/.venv/
+# Belt-and-braces: block serialized data / model formats everywhere,
+# in case files end up outside the folders above
+*.pkl
+*.pt
+*.pth
+*.h5
+*.hdf5
+*.joblib
+*.npy
+*.npz
+*.zip
+*.xlsx
 
-# Ignore Python cache files
-/src/__pycache__/
+# Block ALL csv files by default; explicitly allow only the Sobol
+# sample designs (input-space points only — no simulation outputs)
+*.csv
+!src/src_data/*.csv
+
+# ─── Python ─────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# ─── OS / editor ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

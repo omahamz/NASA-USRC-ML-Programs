@@ -3,3 +3,7 @@ numpy
 pandas
 scipy
 pyqt5
+scikit-learn
+optuna
+torch
+joblib

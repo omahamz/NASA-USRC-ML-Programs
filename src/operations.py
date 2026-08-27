@@ -2,6 +2,7 @@
 import numpy as np
 import scipy.integrate
 import pandas as pd
+import math
 
 # Internal Libraries
 from enum import Enum
@@ -12,71 +13,72 @@ class OperationsInterface:
         FvD = 0
         AvC = 1
 
-    @staticmethod
-    def cfe(df) -> float:
-        if df.shape[0] < 2:
-            return 0.0
-        
-        # Extract columns and handle finite values
-        x = df.iloc[:, 0].to_numpy(dtype=float)
-        y = df.iloc[:, 1].to_numpy(dtype=float)
-
-        m = np.isfinite(x) & np.isfinite(y)
-        x, y = x[m], y[m]
-        if x.size < 2:
-            return 0.0
-
-        # Sort by x
-        order = np.argsort(x)
-        x, y = x[order], y[order]
-
-        # Voronoi-style dx weights per point
-        w = np.empty_like(x, dtype=float)
-        if x.size == 2:
-            w[:] = (x[1] - x[0]) / 2.0
-        else:
-            w[0] = (x[1] - x[0]) / 2.0
-            w[1:-1] = (x[2:] - x[:-2]) / 2.0
-            w[-1] = (x[-1] - x[-2]) / 2.0
-        
-        w = np.clip(w, 0.0, None)
-        if w.sum() == 0:
-            return 0.0
-
-        # Weighted median of y
-        idx = np.argsort(y)
-        y_s, w_s = y[idx], w[idx]
-        cdf = np.cumsum(w_s) / w_s.sum()
-        y_wmed = y_s[np.searchsorted(cdf, 0.5)]
-
-        y_max = np.max(y)
-        if y_max == 0:
-            return 0.0
-        
-        return y_wmed / y_max
-    
-    # OLD VERSION, is instead weighted mean
+    # weighted median
     # def cfe(df) -> float:
-    #     # Expect dataframe with two columns: X and Y
     #     if df.shape[0] < 2:
     #         return 0.0
         
+    #     # Extract columns and handle finite values
     #     x = df.iloc[:, 0].to_numpy(dtype=float)
     #     y = df.iloc[:, 1].to_numpy(dtype=float)
-        
-    #     # Sort in case x is unordered
+
+    #     m = np.isfinite(x) & np.isfinite(y)
+    #     x, y = x[m], y[m]
+    #     if x.size < 2:
+    #         return 0.0
+
+    #     # Sort by x
     #     order = np.argsort(x)
     #     x, y = x[order], y[order]
 
-    #     # Compute weighted mean using trapezoidal integration
-    #     # (y[i] + y[i+1]) / 2 * (x[i+1] - x[i])
-    #     auc = np.trapz(y, x)
-    #     mean_y = auc / (x[-1] - x[0])
+    #     # Voronoi-style dx weights per point
+    #     w = np.empty_like(x, dtype=float)
+    #     if x.size == 2:
+    #         w[:] = (x[1] - x[0]) / 2.0
+    #     else:
+    #         w[0] = (x[1] - x[0]) / 2.0
+    #         w[1:-1] = (x[2:] - x[:-2]) / 2.0
+    #         w[-1] = (x[-1] - x[-2]) / 2.0
+        
+    #     w = np.clip(w, 0.0, None)
+    #     if w.sum() == 0:
+    #         return 0.0
+
+    #     # Weighted median of y
+    #     idx = np.argsort(y)
+    #     y_s, w_s = y[idx], w[idx]
+    #     cdf = np.cumsum(w_s) / w_s.sum()
+    #     y_wmed = y_s[np.searchsorted(cdf, 0.5)]
 
     #     y_max = np.max(y)
     #     if y_max == 0:
     #         return 0.0
-    #     return mean_y / y_max
+        
+    #     return y_wmed / y_max
+    
+    # weighted mean
+    @staticmethod
+    def cfe(df) -> float:
+        # Expect dataframe with two columns: X and Y
+        if df.shape[0] < 2:
+            return 0.0
+        
+        x = df.iloc[:, 0].to_numpy(dtype=float)
+        y = df.iloc[:, 1].to_numpy(dtype=float)
+        
+        # Sort in case x is unordered
+        order = np.argsort(x)
+        x, y = x[order], y[order]
+
+        # Compute weighted mean using trapezoidal integration
+        # (y[i] + y[i+1]) / 2 * (x[i+1] - x[i])
+        auc = np.trapz(y, x)
+        mean_y = auc / (x[-1] - x[0])
+
+        y_max = np.max(y)
+        if y_max == 0:
+            return 0.0
+        return mean_y / y_max
 
     @staticmethod
     def auc_trapz(df, x_col: str, y_col: str) -> float:
@@ -113,3 +115,27 @@ class OperationsInterface:
     #     x = df[x_col]
     #     y = df[y_col]
     #     return float(scipy.trapezoid(y, x))
+
+    @staticmethod
+    def verify_constraints(csv_path):
+        csv_data = pd.read_csv(csv_path)
+        OD = 40
+        L = 50
+        for index, row in csv_data.iterrows():
+            # First equation
+            CC = float(row["CC"])
+            VC = float(row["VC"])
+            R = float(row["R"])
+            LH = (3.14159 * OD)/CC
+            RH = (math.sqrt(3) * R)
+            statement = LH > RH
+            print (f"{statement} | {LH} > {RH}")
+            # Seoncd equation
+            LH = L
+            RH = ((3 * 3.14159 * OD)/(2 * math.sqrt(3) * CC))*(VC - 1) + (2 * R)
+            statement = LH > RH
+            print (f"{statement} | {LH} > {RH}")
+
+
+if __name__ == "__main__":
+    OperationsInterface.verify_constraints("src/lhs_full.csv")

@@ -1,157 +1,105 @@
-# NASA-USRC-ML-Programs
+# NASA USRC — Multi-Fidelity ML Surrogate Models
 
-## Crash- and Turbulence-Resilient eVTOL Seat Base System Using Metamaterials (University of Texas, Arlington)
+Machine learning surrogate models for crashworthiness prediction of thin-walled
+energy-absorbing structures, developed as part of NASA's University Student
+Research Challenge (USRC).
 
-Studying special structures that exhibit exceptional uni-axial energy absorption and vibration damping, to enhance seat-level crashworthiness and integrate turbulence-damping technologies for electric vertical take-off and landing (eVTOL) vehicle seating.
-_Student Team:_ Ryan Shrestha (Team Lead), Pablo Martinez, Omar Hamza, Taegeon Yoon, Aadi Sharma
-_Faculty Mentors:_ Shiyao Lin
-_Selected:_ 2025
+Two surrogate models — a **Multi-Layer Perceptron (MLP)** and a **Multi-Output
+Gaussian Process (GP)** — are trained to predict:
 
-[https://www.nasa.gov/directorates/armd/tacp/ui/usrc/usrc-awards/](url)
+- **SEA** — Specific Energy Absorption (higher is better)
+- **CFE** — Crushing Force Efficiency (closer to 1 is better)
 
-## Setup
+from four structural design parameters:
 
-```bash
-git clone https://github.com/omahamz/NASA-USRC-ML-Programs.git
+| Input | Type  | Description        |
+|-------|-------|--------------------|
+| `R`   | float | Corner radius (mm) |
+| `A`   | float | Angle (degrees)    |
+| `CC`  | int   | Cell count         |
+| `VC`  | int   | Volume coefficient |
+
+Both models use a **multi-fidelity transfer-learning** strategy: they are
+pre-trained on a large set of low-fidelity (shell) simulation results, then
+adapted to a small set of high-fidelity (solid) simulations via a learned
+correction. The goal is to compare the two approaches as simulation surrogates
+and to drive design-space exploration and optimization.
+
+> **Note on data:** The simulation datasets used to train these models are
+> confidential and are **not** included in this repository (see
+> [.gitignore](.gitignore)). Only source code and input-space sample designs
+> (Sobol sequences) are tracked. Trained model artifacts are likewise excluded,
+> since serialized GP models embed their training data.
+
+## Repository Structure
+
+```
+├── main.py                 # Force–displacement post-processing (AUC, CFE, peak force)
+├── compare.py              # Comparison utilities
+├── ML_PLAN.md              # Full modeling plan: data, architecture, training phases
+├── docs/
+│   ├── USAGE.md            # How to train, evaluate, and predict
+│   ├── MLP_DESIGN.md       # MLP architecture & transfer-learning design
+│   └── GP_DESIGN.md        # GP kernel, correction model & acquisition design
+├── src/
+│   ├── sample.py           # Constraint-aware Sobol sampling of the design space
+│   ├── check_constraints.py# Geometric constraint verification
+│   ├── active_sampler.py   # Active learning / adaptive sampling
+│   ├── optimizer.py        # Design optimization over the surrogates
+│   ├── analysis.py         # Data analysis utilities
+│   ├── visualizer.py       # Plotting tools
+│   ├── src_data/           # Sobol sample designs (inputs only — tracked)
+│   └── ml_models/
+│       ├── data_loader.py  # Dataset loading, scaling, LF/HF splits
+│       ├── mlp_model.py    # MLP architecture
+│       ├── gp_model.py     # Multi-output GP + correction model
+│       ├── train_mlp.py    # Two-phase MLP training pipeline
+│       ├── train_gp.py     # Two-phase GP training pipeline
+│       ├── evaluate.py     # Metrics & comparison plots
+│       └── predict.py      # Inference API
+└── Automation/             # Simulation pipeline automation experiments
 ```
 
-Re direct to the cloned directory
+## Getting Started
 
-1.
+### Installation
 
 ```bash
 python -m venv .venv
-```
-
-2.
-
-Windows cmd:
-
-```bash
-.venv\Scripts\activate.bat
-```
-
-Windows powershell:
-
-```bash
-.venv\Scripts\Activate.ps1
-```
-
-MacOS/Linux:
-
-```bash
-source .venv/bin/activate
-```
-
-3.
-
-```bash
+.venv\Scripts\activate        # Windows
 pip install -r requirements.txt
 ```
 
-Lastly, download 'data_folder' from the NASA Drive and locate it in the Parent directory
+### Training
 
-## Data Folder Structure
+```bash
+# Train the MLP (Phase 1: LF pre-train, Phase 2: HF fine-tune)
+python -m src.ml_models.train_mlp
 
-```
-data_folder/ -> n elements
-    1_param/ -> m elements
-        {material1}/ -> k elements
-            {material1}_x11.txt
-            {material1}_x12.txt
-            .
-            .
-            .
-            {material1}_x1k.txt
-            {material1}_params.json
-        .
-        .
-        .
-        {materialm}/ -> k elements
-            {materialm}_x11.txt
-            {materialm}_x12.txt
-            .
-            .
-            .
-            {materialm}_x1k.txt
-            {materialm}_params.json
-    2_param/ -> m elements
-        {material1}/
-            {material1}_x11_x21.txt
-            {material1}_x12_x22.txt
-            .
-            .
-            .
-            {material1}_x1k_x2k.txt
-            {material1}_params.json
-        .
-        .
-        .
-        {materialm}/ -> k elements
-            {materialm}_x11.txt
-            {materialm}_x12.txt
-            .
-            .
-            .
-            {materialm}_x1k.txt
-            {materialm}_params.json
-    .
-    .
-    .
-    n_param/ -> m elements
-        {material1}/ -> k elements
-            {material1}_x11_x21..._xn1.txt
-            {material1}_x12_x22_xn2.txt
-            .
-            .
-            .
-            {material1}_x1k_x2k..._xnk.txt
-            {material1}_params.json
-        .
-        .
-        .
-        {material1m}/ -> k elements
-            {material1}_x11_x21..._xn1.txt
-            {material1}_x12_x22_xn2.txt
-            .
-            .
-            .
-            {material1}_x1k_x2k..._xnk.txt
-            {material1}_params.json
-    output/
-        saves/
-        temp/
+# Train the GP (LF fit + learned delta correction)
+python -m src.ml_models.train_gp
 ```
 
-### Inside `data_folder/`
+Both pipelines support running a single phase (e.g. `--phase 1` / `--phase lf`);
+see [docs/USAGE.md](docs/USAGE.md) for all options, expected training times, and
+what to watch during training.
 
-Each subdirectory is named `n_param`, where `k` is the number of parameters used in the dataset.
+### Prediction
 
-### Inside `data_folder/n_param/`
+After training, use the inference API in `src/ml_models/predict.py` to evaluate
+either surrogate at new design points. Trained artifacts (weights, scalers,
+metrics, and plots) are written to `models/` locally.
 
-Each `n_param` folder contains subfolders named each metamaterial type.
+## Design Space Sampling
 
-### Inside `data_folder/n_param/{material_name}`
+`src/sample.py` generates Sobol sample designs subject to the geometric
+manufacturability constraints of the structure (which eliminate roughly 65% of
+the raw input space). Generated designs and their sampler state live in
+`src/src_data/` — these contain input coordinates only, no simulation results.
 
-Each metamaterial folder contains `.txt` data files. The filenames include the metamaterial acronym and the parameter names in the format `{material_name}..._xn.txt` and a `.json` file naming each parameter in order named `{material_name}.json` with the example format:
+## Documentation
 
-_Note that `.json` files are currently only formatted to handle one parameter_
-
-```json
-{
-  "name": "{material_name}",
-  "n": 4,
-  "params": [
-    "twist angle",
-    "cross sectional angle",
-    "outter wall thickness",
-    "num of patterns"
-  ],
-  "min": 0,
-  "max": 180
-}
-```
-
-## Inside `output/`
-
-Disclosed processed data such as graphs and advanced tables
+- [ML_PLAN.md](ML_PLAN.md) — end-to-end modeling plan and rationale
+- [docs/MLP_DESIGN.md](docs/MLP_DESIGN.md) — MLP architecture and training design
+- [docs/GP_DESIGN.md](docs/GP_DESIGN.md) — GP design, kernels, and acquisition
+- [docs/USAGE.md](docs/USAGE.md) — practical usage guide
