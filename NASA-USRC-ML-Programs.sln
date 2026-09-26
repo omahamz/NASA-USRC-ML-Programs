@@ -1,0 +1,29 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Automation", "Automation", "{BE4A8008-4A00-8C08-26C2-BD576741EBBE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SwGen", "Automation\SwGen\SwGen.csproj", "{12CE0571-570F-7F8A-CE99-BBF083E35715}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{12CE0571-570F-7F8A-CE99-BBF083E35715}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{12CE0571-570F-7F8A-CE99-BBF083E35715}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{12CE0571-570F-7F8A-CE99-BBF083E35715}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{12CE0571-570F-7F8A-CE99-BBF083E35715}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{12CE0571-570F-7F8A-CE99-BBF083E35715} = {BE4A8008-4A00-8C08-26C2-BD576741EBBE}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {89E5BAFB-4CEB-4572-B916-1FFBC5C3454E}
+	EndGlobalSection
+EndGlobal

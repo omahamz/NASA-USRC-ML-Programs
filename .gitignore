@@ -34,6 +34,15 @@ venv/
 env/
 .ipynb_checkpoints/
 
+# ─── C# build output / generated CAD ───────────────────────────────
+bin/
+obj/
+.vs/
+*.stp
+*.step
+*.SLDPRT
+*.sldprt
+
 # ─── OS / editor ────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
