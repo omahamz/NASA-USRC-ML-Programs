@@ -21,6 +21,12 @@ _PLOTS_DIR   = os.path.join(
 )
 
 
+def set_plots_dir(path: str) -> None:
+    """Redirect saved plots (default: <project>/models/plots) - the train scripts point this at <models-dir>/plots."""
+    global _PLOTS_DIR
+    _PLOTS_DIR = path
+
+
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
@@ -52,6 +58,54 @@ def compute_metrics(
             "MAE":  round(float(mean_absolute_error(yt, yp)),                 4),
         }
     return out
+
+
+def compute_metrics_by_config(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    labels: np.ndarray,
+    min_rows: int = 2,
+) -> dict[str, dict[str, dict[str, float]]]:
+    """
+    compute_metrics() separately for every (N, T) configuration label.
+
+    Pooled R² can hide a poorly predicted configuration, so the train scripts report
+    this whenever more than one configuration is present.  Configurations with fewer
+    than `min_rows` rows are skipped (R² is undefined for a single point).
+
+    Returns { 'N6_T0': {'SEA': {...}, 'CFE': {...}, 'n': 25}, ... }
+    """
+    labels = np.asarray(labels)
+    out: dict[str, dict] = {}
+    for label in np.unique(labels):
+        rows = labels == label
+        if int(rows.sum()) < min_rows:
+            continue
+        m = compute_metrics(y_true[rows], y_pred[rows])
+        m["n"] = int(rows.sum())
+        out[str(label)] = m
+    return out
+
+
+def print_metrics_by_config(metrics: dict[str, dict[str, dict[str, dict[str, float]]]]) -> None:
+    """
+    Print per-configuration R² / RMSE for several model variants.
+
+    Parameters
+    ----------
+    metrics : { 'Model Name': compute_metrics_by_config(...) output, ... }
+    """
+    if not any(metrics.values()):
+        return
+    print("\nPer-configuration metrics (HF test set)")
+    print(f"{'Model':<20}{'Config':<10}{'n':>4}{'SEA-R2':>10}{'SEA-RMSE':>10}{'CFE-R2':>10}{'CFE-RMSE':>10}")
+    print("-" * 74)
+    for model, by_cfg in metrics.items():
+        for label, m in by_cfg.items():
+            print(f"{model:<20}{label:<10}{m['n']:>4}"
+                  f"{m['SEA']['R2']:>10.4f}{m['SEA']['RMSE']:>10.4f}"
+                  f"{m['CFE']['R2']:>10.4f}{m['CFE']['RMSE']:>10.4f}")
+    print()
 
 
 def print_metrics_table(metrics: dict[str, dict[str, dict[str, float]]]) -> None:

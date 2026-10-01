@@ -6,49 +6,23 @@ import sys
 # 3rd Party
 import pandas as pd
 
-# Example usage: python check_constraints.py src_data/Sample_OD42L50.csv --G 2 --L 50 --OD 40 --out src_data/Sample_OD42L50_violations.csv
+# Local
+from constraints import (
+    CONSTRAINT_SETS,
+    config_columns,
+    config_label,
+    constraint_names,
+    evaluate,
+)
 
-# ---------------------------------------------------------------------------
-# Constraint functions  (return True when the row VIOLATES the constraint)
-# ---------------------------------------------------------------------------
+# Example usage: python check_constraints.py src_data/Sample_OD40L50G3_New.csv --G 3 --L 50 --OD 40 --out src_data/violations.csv
+#
+# The constraints themselves live in constraints.py (single source of truth shared with
+# sample.py).  Each row is checked against the constraint set of its own (N, T)
+# configuration; a CSV without T / N columns is treated as the legacy (N=6, T=0) family.
+# Rows of a placeholder configuration (constraints not derived yet) are reported as
+# UNCHECKED and count as failing.
 
-def violates_c1(row: pd.Series, G: float, L: float, OD: float) -> bool:
-    """
-    Constraint 1:  VC < (L - 2*(G + R)) / (2R - (5π·OD)/(6·CC))  + 1
-
-    Violated when VC >= RHS.
-    Note: denominator can be zero/negative — treated as violation if so.
-    """
-    R  = row["R"]
-    CC = row["CC"]
-    VC = row["VC"]
-
-    numerator   = L - 2 * (G + R)
-    denominator = 2 * R - (5 * 3.141592653589793 * OD) / (6 * CC)
-
-    if denominator <= 0:
-        return True                     # undefined / infinite RHS → violation
-
-    rhs = numerator / denominator + 1
-    return VC >= rhs
-
-
-def violates_c2(row: pd.Series, G: float, L: float) -> bool:
-    """
-    Constraint 2:  VC < (L - 2*(R + G)) / R  + 1
-
-    Violated when VC >= RHS.
-    """
-    R  = row["R"]
-    VC = row["VC"]
-
-    rhs = (L - 2 * (R + G)) / R + 1
-    return VC >= rhs
-
-
-# ---------------------------------------------------------------------------
-# Main checker
-# ---------------------------------------------------------------------------
 
 def check_constraints(
     csv_path: str,
@@ -56,7 +30,12 @@ def check_constraints(
     L: float,
     OD: float,
     output_path: str | None = None,
-) -> None:
+) -> pd.DataFrame | None:
+    """Check every row of ``csv_path`` and print a per-configuration violation summary.
+
+    Writes the failing rows (violated *or* unchecked) to ``output_path`` (default
+    ``<input>_violations.csv``) and returns them, or returns None when every row passes.
+    """
 
     if not os.path.isfile(csv_path):
         print(f"ERROR: File not found: {csv_path}")
@@ -70,55 +49,78 @@ def check_constraints(
         print(f"ERROR: CSV is missing required columns: {missing}")
         sys.exit(1)
 
-    # 1-based row index matching the original Sobol sample order
+    try:
+        cfg = config_columns(df)
+    except ValueError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
+    absent = [c for c in ("N", "T") if c not in df.columns]
+    if absent:
+        print(f"NOTE: column(s) {absent} absent - treating those rows as the legacy (N=6, T=0) configuration.")
+
+    report = evaluate(df, OD=OD, L=L, G=G)
+
+    # 1-based row index matching the original sample order
     df.insert(0, "SampleRow", range(1, len(df) + 1))
+    n_total = len(df)
 
-    # Evaluate each constraint per row
-    df["Violates_C1"] = df.apply(violates_c1, axis=1, G=G, L=L, OD=OD)
-    df["Violates_C2"] = df.apply(violates_c2, axis=1, G=G, L=L)
-    df["Violates_Any"] = df["Violates_C1"] | df["Violates_C2"]
-
-    # --- Summary counts ---
-    n_total  = len(df)
-    n_c1     = int(df["Violates_C1"].sum())
-    n_c2     = int(df["Violates_C2"].sum())
-    n_either = int(df["Violates_Any"].sum())
-    n_both   = int((df["Violates_C1"] & df["Violates_C2"]).sum())
-
-    print("\n" + "=" * 50)
+    # --- Summary per configuration ---
+    print("\n" + "=" * 62)
     print("  CONSTRAINT VIOLATION SUMMARY")
-    print("=" * 50)
+    print("=" * 62)
     print(f"  Constants used:  G={G},  L={L},  OD={OD}")
     print(f"  Total rows:      {n_total}")
-    print(f"  Violate C1:      {n_c1}  ({100*n_c1/n_total:.1f}%)")
-    print(f"  Violate C2:      {n_c2}  ({100*n_c2/n_total:.1f}%)")
-    print(f"  Violate both:    {n_both}  ({100*n_both/n_total:.1f}%)")
-    print(f"  Violate either:  {n_either}  ({100*n_either/n_total:.1f}%)")
-    print("=" * 50 + "\n")
 
-    # --- Rows that violated at least one constraint ---
-    violated = df[df["Violates_Any"]].copy()
+    used_names: list[str] = []
+    for (n, t), cset in CONSTRAINT_SETS.items():
+        rows = ((cfg["N"] == n) & (cfg["T"] == t)).to_numpy()
+        n_rows = int(rows.sum())
+        if n_rows == 0:
+            continue
+        print(f"\n  Configuration (N={n}, T={t}) [{config_label((n, t))}]: {n_rows} row(s)")
+        if cset is None:
+            print("    UNCHECKED - constraints for this configuration are not derived yet")
+            continue
+        for con in cset:
+            used_names.append(con.name)
+            n_bad = int((report.loc[rows, con.name] == False).sum())     # noqa: E712
+            print(f"    Violate {con.name}: {n_bad:>6}  ({100 * n_bad / n_rows:5.1f}%)   {con.expr}")
+        n_any = int((~report.loc[rows, "feasible"]).sum())
+        print(f"    Violate any: {n_any:>5}  ({100 * n_any / n_rows:5.1f}%)")
 
-    if violated.empty:
-        print("All rows satisfy both constraints. No output CSV written.")
-        return
+    n_unchecked = int((~report["defined"]).sum())
+    n_failing   = int((~report["feasible"]).sum())
+    print(f"\n  Failing rows (violated or unchecked): {n_failing}  ({100 * n_failing / max(n_total, 1):.1f}%)")
+    if n_unchecked:
+        print(f"  Unchecked rows (placeholder configuration): {n_unchecked}")
+    print("=" * 62 + "\n")
 
-    # Drop the helper boolean columns from the saved file but keep Which ones
-    # were violated so the output is informative.
-    violated = violated.drop(columns=["Violates_Any"])
+    failing = report["feasible"] == False        # noqa: E712
+    if not failing.any():
+        print("All rows satisfy their constraints. No output CSV written.")
+        return None
 
-    # Default output path next to the input file
+    # Failing rows keep the original columns plus one flag per applicable constraint
+    # (blank where the constraint does not apply to that row's configuration).
+    out = df[failing.to_numpy()].copy()
+    for name in constraint_names():
+        if name in used_names:
+            flag = report.loc[failing, name].map(lambda v: pd.NA if pd.isna(v) else (not bool(v)))
+            out[f"Violates_{name}"] = flag.astype("boolean").to_numpy()
+    out["Unchecked"] = (~report.loc[failing, "defined"]).to_numpy()
+
     if output_path is None:
         base, ext = os.path.splitext(csv_path)
         output_path = f"{base}_violations{ext}"
 
-    violated.to_csv(output_path, index=False)
+    out.to_csv(output_path, index=False)
     print(f"Violations written to: {output_path}")
-    print(f"({len(violated)} rows)\n")
+    print(f"({len(out)} rows)\n")
 
-    # Print a quick preview
-    print(violated.to_string(index=False))
+    print(out.to_string(index=False))
     print()
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -128,9 +130,15 @@ def check_constraints(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Check Sobol sample rows against two geometric constraints.\n\n"
-            "Constraint 1: VC < (L - 2(G+R)) / (2R - 5π·OD/(6·CC))  + 1\n"
-            "Constraint 2: VC < (L - 2(R+G)) / R  + 1"
+            "Check sample rows against the geometric constraints of their (N, T) configuration.\n\n"
+            "(N=6, T=0)  C1: R < pi*OD/(sqrt(3)*CC)\n"
+            "            C2: R < (1/VC)(L/2-G) + (sqrt(3)*pi*OD/(12*CC))(1-1/VC)\n"
+            "            C3: R < (L-2G)/(VC+1)\n"
+            "(N=0, T=0)  E1: R < (L-2G)/(VC+1)\n"
+            "            E2: R < pi*OD/(2*CC)\n"
+            "            E3: 4R^2 > (pi*OD/(2*CC))^2 + ((L-2(R+G))/(VC-1))^2\n"
+            "(T=1)       placeholder - constraints not derived yet (rows are UNCHECKED)\n\n"
+            "Columns N and T are optional; without them every row is treated as (N=6, T=0)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

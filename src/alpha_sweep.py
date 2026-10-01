@@ -48,7 +48,7 @@ matplotlib.use("Agg")          # consistent with optimizer.py; plots saved to fi
 import matplotlib.pyplot as plt
 
 from optimizer import run_optimizer
-from ml_models.data_loader import FEATURE_COLS   # ["R", "A", "CC", "VC"]
+from ml_models.data_loader import LEGACY_FEATURE_COLS as FEATURE_COLS   # ["R", "A", "CC", "VC"]
 
 
 # ---------------------------------------------------------------------------

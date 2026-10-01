@@ -5,8 +5,12 @@
 The multi-fidelity Gaussian Process (GP) provides a **probabilistic** surrogate that maps:
 
 ```
-f : (R, A, CC, VC) → (SEA, CFE)
+f : (R, A, CC, VC, T, N) → (SEA, CFE)
 ```
+
+`T` (0 = untwisted, 1 = twist-angle part) and `N` (6 = hexagonal cells, 0 = ellipsoidal holes) are binary
+configuration flags that select the part family.  Data from before this extension has no `N` column and a
+constant `T = 0`; it is read as `N = 6, T = 0`, so the two extra inputs are constant columns there.
 
 Unlike the MLP, which returns a point estimate, the GP returns a full posterior distribution
 over the output — including a **posterior mean** (the prediction) and a **posterior standard
@@ -84,7 +88,7 @@ bounds for each physical quantity.
 ### 4.1  Chosen kernel
 
 ```python
-C(amplitude) * RBF(length_scale=[l_R, l_A, l_CC, l_VC]) + WhiteKernel(noise)
+C(amplitude) * RBF(length_scale=[l_R, l_A, l_CC, l_VC, l_T, l_N]) + WhiteKernel(noise)
 ```
 
 ### 4.2  Why RBF?
@@ -110,12 +114,16 @@ Alternative kernels considered:
 
 ### 4.3  ARD (Automatic Relevance Determination)
 
-Using a **separate length scale per input dimension** (`length_scale=[l_R, l_A, l_CC, l_VC]`)
+Using a **separate length scale per input dimension** (`length_scale=[l_R, l_A, l_CC, l_VC, l_T, l_N]`)
 allows the kernel to discover that:
 - R (range ~6.8 after standardization: ≈ ±2σ) has a different effective correlation length than
   CC (integer-valued, range 4–22) or VC (integer-valued, range 4–10)
 - Some parameters may have weaker effect on SEA/CFE than others — ARD implements soft
   feature selection by learning very large length scales for irrelevant features
+- T and N are binary flags: their length scales say how strongly the response shifts between part
+  families.  A constant column (all-legacy data) has no gradient, so its length scale stays at the
+  optimizer's starting value and has no effect on the fit.  (A dedicated categorical / coregionalisation
+  kernel would model the families more explicitly; the plain ARD-RBF is used here for simplicity.)
 
 ARD was introduced in the context of GPs by MacKay (1992) and Neal (1996) and is standard
 practice for surrogate modeling with heterogeneous inputs (Rasmussen & Williams, 2006, §5.1).
@@ -132,7 +140,7 @@ tolerances).  The noise variance σ²ₙ is optimized jointly with the RBF hyper
 
 ### 4.5  Hyperparameter optimization
 
-All kernel hyperparameters (amplitude, 4 length scales, noise variance) are estimated by
+All kernel hyperparameters (amplitude, 6 length scales, noise variance) are estimated by
 maximizing the **log marginal likelihood**:
 
 ```
@@ -177,13 +185,13 @@ phases:
 
 **Phase 1 — Fit GP_LF on 938 LF samples:**
 ```
-GP_LF: (R, A, CC, VC) → P(SEA_LF | X_LF, y_LF)
+GP_LF: (R, A, CC, VC, T, N) → P(SEA_LF | X_LF, y_LF)
 ```
 
 **Phase 2 — Compute residuals and fit GP_delta on 98 HF samples:**
 ```
 δᵢ = SEA_HF(xᵢ) − GP_LF.predict(xᵢ)   for i = 1, …, 98
-GP_delta: (R, A, CC, VC) → P(δ | X_HF, δ)
+GP_delta: (R, A, CC, VC, T, N) → P(δ | X_HF, δ)
 ```
 
 **Prediction at any new x:**

@@ -5,10 +5,15 @@
 The multi-layer perceptron (MLP) is trained to approximate the mapping:
 
 ```
-f : (R, A, CC, VC) → (SEA, CFE)
+f : (R, A, CC, VC, T, N) → (SEA, CFE)
 ```
 
-from a finite set of finite-element analysis (FEA) simulation results, avoiding the need to
+`T` (0 = untwisted, 1 = twist-angle part) and `N` (6 = hexagonal cells, 0 = ellipsoidal holes) are binary
+configuration flags that select the part family; R, A, CC, VC are the geometry parameters. Data from before
+this extension carries no `N` column and a constant `T = 0`; it is read as `N = 6, T = 0`, which makes the two
+extra inputs constant columns (standardized to 0) and lets the 6-input network be trained on legacy data.
+
+The model is trained from a finite set of finite-element analysis (FEA) simulation results, avoiding the need to
 run expensive simulations for every candidate design during optimization.
 
 **Why an MLP?** Universal approximation theory guarantees that a feed-forward network with
@@ -21,7 +26,7 @@ generalize far better than wide-shallow networks on physical simulation data (Be
 ## 2. Architecture
 
 ```
-Input  (4)  →  Hidden-1 (64) + tanh
+Input  (6)  →  Hidden-1 (64) + tanh
             →  Hidden-2 (32) + tanh
             →  Hidden-3 (16) + tanh
             →  Output  (2,  linear)
@@ -29,12 +34,12 @@ Input  (4)  →  Hidden-1 (64) + tanh
 
 | Layer     | Shape   | Parameters | Role                                                     |
 | --------- | ------- | ---------- | -------------------------------------------------------- |
-| Input     | 4       | —          | R, A, CC, VC (standardized)                              |
-| Hidden-1  | 4 → 64  | 320        | Broad feature extraction; encodes geometric interactions |
+| Input     | 6       | —          | R, A, CC, VC, T, N (standardized)                        |
+| Hidden-1  | 6 → 64  | 448        | Broad feature extraction; encodes geometric interactions |
 | Hidden-2  | 64 → 32 | 2,080      | Cross-parameter relationship compression                 |
 | Hidden-3  | 32 → 16 | 528        | Compact pre-output representation                        |
 | Output    | 16 → 2  | 34         | SEA and CFE simultaneously (linear, no activation)       |
-| **Total** |         | **2,962**  |                                                          |
+| **Total** |         | **3,090**  | (2,962 for the legacy 4-input network)                   |
 
 ### 2.1 Why three hidden layers?
 
@@ -42,8 +47,10 @@ Physical crashworthiness simulation responses involve interactions at multiple s
 
 - **Local scale**: R and CC are coupled through constraint C1; small changes in R require
   large changes in CC to remain geometrically feasible.
-- **Global scale**: The combined effect of all four parameters determines the volume fraction
+- **Global scale**: The combined effect of all four geometry parameters determines the volume fraction
   and ultimately SEA and CFE.
+- **Configuration**: T and N shift the whole response surface (different part families), so they interact
+  with every geometry parameter; the hidden layers have to model those interactions too.
 
 A single hidden layer is theoretically sufficient for universal approximation, but deeper networks often represent complex compositional relationships more efficiently and with fewer parameters. Two
 hidden layers begin capturing pairwise interactions. Three hidden layers can represent
@@ -63,8 +70,9 @@ choice for regression surrogates (Goodfellow et al., 2016, §6.4.3):
 
 - **Encoder perspective**: Wide first layer extracts many candidate features; subsequent layers
   select and compress into a low-dimensional representation sufficient for the two outputs.
-- **Parameter efficiency**: Total parameters (~2,962) give a samples-to-parameters ratio of
-  ~0.25 for 750 LF training samples. With L2 regularization (weight decay) and early stopping,
+- **Parameter efficiency**: Total parameters (~3,090) give a samples-to-parameters ratio of
+  ~0.24 for 750 LF training samples (more LF data per configuration is expected once several
+  part families are pooled). With L2 regularization (weight decay) and early stopping,
   this is well-regularized. Standard recommendation is >10 samples per parameter for
   unregularized models, but regularized networks can achieve good generalization with ratios
   as low as 0.1–0.5 (Goodfellow et al., 2016).
@@ -148,8 +156,8 @@ Later layers that map the learned representation to specific (SEA, CFE) values n
 In Phase 2, **Hidden-1 and Hidden-2 are frozen** (requires_grad=False):
 
 ```
-Frozen (Phase 2):     Hidden-1 (4→64)   Hidden-2 (64→32)
-                      [2,400 params frozen]
+Frozen (Phase 2):     Hidden-1 (6→64)   Hidden-2 (64→32)
+                      [2,528 params frozen]
 
 Trainable (Phase 2):  Hidden-3 (32→16)  Output (16→2)
                       [562 params trainable]
@@ -167,7 +175,7 @@ units). The observed delta variance requires learning a non-trivial correction, 
 a single linear output layer cannot represent.
 
 **Why not unfreeze all layers?**
-With only 98 HF samples, fine-tuning all 2,962 parameters would lead to catastrophic
+With only 98 HF samples, fine-tuning all 3,090 parameters would lead to catastrophic
 forgetting of the LF pre-training (McCloskey & Cohen, 1989; Kirkpatrick et al., 2017).
 
 ### 6.3 Lower learning rate in Phase 2
@@ -353,7 +361,7 @@ represents a 33–65% increase in the fine-tune dataset.  This is a significant
 regime change for gradient-based updating.
 
 **Mitigation already in place**: Phase 2 freezes the first two hidden layers
-(only 562 out of 2962 total parameters are updated).  This strongly limits
+(only 562 out of 3,090 total parameters are updated).  This strongly limits
 catastrophic forgetting of the LF pre-training because the bulk of the network's
 representational capacity is preserved (Kirkpatrick et al., 2017).
 
@@ -387,6 +395,10 @@ methods from random restarts can miss many of these.
 - Robust to multimodal landscapes due to population diversity.
 
 ### 13.2 Mixed-Integer Problem Formulation
+
+> `optimizer.py` still works on the legacy 4-input network only (the `N = 6, T = 0` family); it exits with a
+> clear message if it is pointed at a 6-input model. Porting it to `[R, A, CC, VC, T, N]` (with T and N fixed
+> per run and the per-configuration constraints of `src/constraints.py`) is a follow-up.
 
 The design vector is `x = [R, A, CC, VC]` where R and A are continuous, CC and VC are
 integer-valued:

@@ -4,7 +4,8 @@
 
 Two surrogate models — a Multi-Layer Perceptron (MLP) and a Multi-Output Gaussian Process (GP)
 — are trained to predict **SEA** (Specific Energy Absorption) and **CFE** (Crushing Force
-Efficiency) from four structural parameters (R, A, CC, VC). Both models are first pre-trained on
+Efficiency) from six design inputs (R, A, CC, VC, T, N): four geometry parameters plus two binary
+configuration flags that select the part family (see *Configurations* below). Both models are first pre-trained on
 ~938 low-fidelity shell simulation data points, then adapted to ~123 high-fidelity solid
 simulation data points via transfer learning. The goal is to study and compare the two
 approaches in the context of material science simulation surrogates.
@@ -20,7 +21,11 @@ approaches in the context of material science simulation surrogates.
 
 **Geometry constants**: OD=40 mm, ID=32 mm, L=50 mm.
 
-**T column**: Verified to be 0 for all 1,061 rows — not informative, excluded from model inputs.
+**T and N columns**: `T` (0 = untwisted, 1 = twist-angle part) and `N` (6 = hexagonal cells, 0 = ellipsoidal
+holes) are model inputs. The current CSVs predate the extension: `T` is 0 for all 1,061 rows and there is no `N`
+column, so `data_loader` reads them as `N = 6, T = 0` (two constant inputs, standardized to 0). New data may be
+passed as several PD CSVs (`--lf-csv a.csv b.csv`); `N` must be 0 or 6 and `T` 0 or 1 (a trailing `!` in `N`,
+used by the PD files for modified-mesh variants, is dropped).
 
 **Overlap**: 118/123 HF points (95.9%) have an exact matching LF point. The 5 non-overlapping
 points are handled naturally by evaluating the LF model at those locations.
@@ -42,7 +47,7 @@ worth modeling with a learned correction. CFE differences are smaller but non-ne
 ## Inputs and Outputs
 
 ```
-Inputs  X = [R, A, CC, VC]
+Inputs  X = [R, A, CC, VC, T, N]
 Outputs Y = [SEA, CFE]
 ```
 
@@ -52,16 +57,29 @@ Outputs Y = [SEA, CFE]
 | A        | float | [30, 90]     | Angle (degrees)                 |
 | CC       | int   | {4, …, 22}   | Cell count                      |
 | VC       | int   | {4, …, 10}   | Volume coefficient              |
+| T        | int   | {0, 1}       | Twist flag (0 = untwisted)      |
+| N        | int   | {0, 6}       | 6 = hexagonal cells, 0 = ellipsoidal holes |
 | SEA      | float | [0, ∞)       | Target; higher is better        |
 | CFE      | float | [0, 1]       | Target; closer to 1 is better   |
 
-Geometric constraints reduce ~65% of the input space:
-- C1: `CC < (π·OD) / (√3·R)`
-- C2: `VC < [L - 2(G+R)] / |2R - √3·π·OD/(6·CC)| + 1`
-- C3: `VC < [L - 2(R+G)] / R + 1`
+### Configurations and constraints
 
-All 1,061 data points already satisfy these constraints (they were sampled with constraint
-enforcement in `sample.py`).
+Each `(N, T)` configuration is a different part family (`N6AShell`, `N6TAShell`, `N0AShell`, `N0TAShell`,
+and `...Solid`) with its own geometric feasibility rules, defined in `src/constraints.py` (used by `sample.py`,
+`check_constraints.py` and `stp_preflight.py`; strict inequalities):
+
+| Config | Constraints | Share of the (R, A, CC, VC) box |
+|---|---|---|
+| (6, 0) | C1 `R < π·OD/(√3·CC)` · C2 `R < (1/VC)(L/2−G) + (√3·π·OD/(12·CC))(1−1/VC)` · C3 `R < (L−2G)/(VC+1)` | ~37 % |
+| (0, 0) | E1 `R < (L−2G)/(VC+1)` · E2 `R < π·OD/(2·CC)` · E3 `4R² > (π·OD/(2·CC))² + ((L−2(R+G))/(VC−1))²` | ~6 % |
+| (6, 1), (0, 1) | placeholders — constraints not derived yet; never sampled, rejected by the STP pre-flight | – |
+
+C2 is the earlier `VC < [L−2(G+R)]/|2R−√3·π·OD/(6·CC)| + 1` solved for R. The closed form drops the
+`|2R − a|` branch and therefore admits ~0.04 % more of the box (CC ≈ 4, small R, VC 9–10). C1 and C3 are
+unchanged, and all 1,061 existing data points satisfy the constraints.
+
+Sampling draws K points *per configuration* (each configuration has its own Sobol/LHS stream, constraints and
+domain propagation); the four inputs R, A, CC, VC share the same bounds in every configuration.
 
 ---
 
@@ -117,19 +135,20 @@ comparing all model variants.
 
 Requires adding `torch` to `requirements.txt`.
 
-### Architecture: [4 → 64 → 32 → 16 → 2]
+### Architecture: [6 → 64 → 32 → 16 → 2]
 
 ```
-Input Layer    :  4 neurons   (R, A, CC, VC — standardized)
+Input Layer    :  6 neurons   (R, A, CC, VC, T, N — standardized)
 Hidden Layer 1 : 64 neurons   + tanh
 Hidden Layer 2 : 32 neurons   + tanh
 Hidden Layer 3 : 16 neurons   + tanh
 Output Layer   :  2 neurons   (SEA_std, CFE_std — linear)
 ```
 
-**Total parameters**: (4×64+64) + (64×32+32) + (32×16+16) + (16×2+2) = 320+2080+528+34 = **2,962**
+**Total parameters**: (6×64+64) + (64×32+32) + (32×16+16) + (16×2+2) = 448+2080+528+34 = **3,090**
+(2,962 for the earlier 4-input network; the Phase-2 trainable count of 562 is unchanged)
 
-**Ratio of LF training samples to parameters**: 750 / 2,962 ≈ 0.25
+**Ratio of LF training samples to parameters**: 750 / 3,090 ≈ 0.24
 
 This ratio is below the classical "10× rule," but with L2 regularization and early stopping
 it is adequate. The architecture is kept deliberately moderate — 3 hidden layers rather than
@@ -197,7 +216,7 @@ weight decay (1e-3 vs 1e-4) controls overfitting on the small HF set.
 
 **Rationale for freezing layers 1 and 2:**
 
-- Layer 1 (4→64) captures broad feature interactions from the raw inputs — this is domain
+- Layer 1 (6→64) captures broad feature interactions from the raw inputs — this is domain
   knowledge about the geometry that is fidelity-independent. Whether a simulation uses shell or
   solid elements, the geometric relationships (R vs CC via constraint C1, VC vs R via C2) are
   the same. This layer should be preserved.
@@ -257,7 +276,7 @@ The scalarized Obj can always be computed from the two GP predictions: `Obj = GP
 ### Kernel
 
 ```
-kernel = C(1.0) * RBF(length_scale=[1.0]*4, length_scale_bounds=(1e-2, 1e2)) 
+kernel = C(1.0) * RBF(length_scale=[1.0]*6, length_scale_bounds=(1e-2, 1e2)) 
          + WhiteKernel(noise_level=0.01, noise_level_bounds=(1e-5, 1.0))
 ```
 
@@ -392,9 +411,9 @@ src/
 ### `data_loader.py` responsibilities
 
 - Load `Shell_Fixed_PD.csv` and `Solid_PD.csv` from `data_folder/1_param/`
-- Select columns: `['R', 'A', 'CC', 'VC']` as X, `['SEA', 'CFE']` as Y
+- Select columns: `['R', 'A', 'CC', 'VC', 'T', 'N']` as X, `['SEA', 'CFE']` as Y (missing `N` → 6, missing `T` → 0)
 - Drop any rows with NaN in X or Y
-- Create train/val/test splits (stratified by CC and VC for representativeness)
+- Create train/val/test splits (stratified by `(N, T)` configuration when every configuration has ≥ 2 rows)
 - Fit `StandardScaler` on LF train split; export for reuse
 
 ### `mlp_model.py` responsibilities
@@ -420,7 +439,8 @@ src/
 - `load_gp()`: loads multi-fidelity GP from `models/`
 - `predict_mlp(X, phase='hf')`: returns (SEA, CFE) in original units
 - `predict_gp(X)`: returns (SEA_mean, SEA_std, CFE_mean, CFE_std) in original units
-- Input validation: check X shape (n, 4), clip R/A to domain, round CC/VC to nearest int
+- Input validation: X is (n, 6) `[R, A, CC, VC, T, N]` (a legacy (n, 4) input is padded with T=0, N=6 and warns);
+  T/N outside {0,1}/{0,6} raise; out-of-domain R/A/CC/VC warn (no rounding or clipping)
 
 ---
 

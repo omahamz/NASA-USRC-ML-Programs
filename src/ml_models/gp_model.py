@@ -14,11 +14,13 @@ where delta(x_i) = Y_HF(x_i) - GP_LF.predict(x_i) is the fidelity residual.
 
 Kernel
 ------
-C(amplitude) * RBF(length_scale=[l_R, l_A, l_CC, l_VC]) + WhiteKernel(noise)
+C(amplitude) * RBF(length_scale=[l_R, l_A, l_CC, l_VC, l_T, l_N]) + WhiteKernel(noise)
 
 A separate length scale per input dimension (ARD — Automatic Relevance
 Determination) allows the kernel to discover that CC and VC (integer-valued)
-contribute differently than R and A (continuous floats).  Hyperparameters are
+contribute differently than R and A (continuous floats), and how strongly the two
+binary configuration flags T and N shift the response.  Legacy models trained on the
+four geometry inputs only (n_features=4) still load.  Hyperparameters are
 optimized by maximizing the log marginal likelihood (Rasmussen & Williams, 2006,
 §5.4.1) using L-BFGS-B with multiple random restarts.
 
@@ -57,10 +59,11 @@ import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel as C, RBF, WhiteKernel
 
-N_FEATURES = 4   # R, A, CC, VC
+N_FEATURES = 6   # R, A, CC, VC, T, N  (== len(data_loader.FEATURE_COLS); checked in tests)
+LEGACY_N_FEATURES = 4
 
 
-def _make_kernel(amplitude: float = 1.0, noise: float = 0.01) -> object:
+def _make_kernel(amplitude: float = 1.0, noise: float = 0.01, n_features: int = N_FEATURES) -> object:
     """
     Build one ARD-RBF + WhiteKernel instance.
 
@@ -68,12 +71,13 @@ def _make_kernel(amplitude: float = 1.0, noise: float = 0.01) -> object:
     sklearn's GP optimizer mutates the kernel in-place.  Using the same object
     for multiple GPs would corrupt their hyperparameter optimization.
 
-    amplitude : starting ConstantKernel value (LF: 1.0, delta: 0.5)
-    noise     : starting noise level (both models: 0.01 in standardized units)
+    amplitude  : starting ConstantKernel value (LF: 1.0, delta: 0.5)
+    noise      : starting noise level (both models: 0.01 in standardized units)
+    n_features : number of input dimensions = number of ARD length scales
     """
     return (
         C(amplitude, constant_value_bounds=(1e-3, 1e3))
-        * RBF(length_scale=[1.0] * N_FEATURES, length_scale_bounds=(1e-2, 1e2))
+        * RBF(length_scale=[1.0] * n_features, length_scale_bounds=(1e-2, 1e2))
         + WhiteKernel(noise_level=noise, noise_level_bounds=(1e-5, 1.0))
     )
 
@@ -92,7 +96,7 @@ class MultiFidelityGP:
     >>> gp.save("models/gp")
     """
 
-    def __init__(self, n_restarts: int = 5, alpha: float = 1e-6):
+    def __init__(self, n_restarts: int = 5, alpha: float = 1e-6, n_features: int = N_FEATURES):
         """
         Parameters
         ----------
@@ -104,20 +108,24 @@ class MultiFidelityGP:
         alpha      : diagonal jitter added to the Gram matrix for numerical
                      stability (equivalent to a minimum noise floor).
                      1e-6 is sklearn's recommended default.
+        n_features : input dimensionality (6 = R, A, CC, VC, T, N).  One ARD length
+                     scale per input; saved in the metadata so models reload correctly.
         """
         self.n_restarts = n_restarts
         self.alpha = alpha
+        self.n_features = n_features
         self._build_gps()
 
     def _build_gps(self) -> None:
         kw = dict(n_restarts_optimizer=self.n_restarts, alpha=self.alpha, normalize_y=False)
+        nf = self.n_features
         # LF GPs — amplitude=1.0 matches standardized target variance
-        self.gp_sea_lf    = GaussianProcessRegressor(kernel=_make_kernel(1.0, 0.01), **kw)
-        self.gp_cfe_lf    = GaussianProcessRegressor(kernel=_make_kernel(1.0, 0.01), **kw)
+        self.gp_sea_lf    = GaussianProcessRegressor(kernel=_make_kernel(1.0, 0.01, nf), **kw)
+        self.gp_cfe_lf    = GaussianProcessRegressor(kernel=_make_kernel(1.0, 0.01, nf), **kw)
         # Correction GPs — amplitude=0.5 reflects that delta is typically smaller
         # than the raw response; this gives the optimizer a better starting point.
-        self.gp_sea_delta = GaussianProcessRegressor(kernel=_make_kernel(0.5, 0.01), **kw)
-        self.gp_cfe_delta = GaussianProcessRegressor(kernel=_make_kernel(0.5, 0.01), **kw)
+        self.gp_sea_delta = GaussianProcessRegressor(kernel=_make_kernel(0.5, 0.01, nf), **kw)
+        self.gp_cfe_delta = GaussianProcessRegressor(kernel=_make_kernel(0.5, 0.01, nf), **kw)
         self.is_lf_fitted = False
         self.is_hf_fitted = False
         self._lf_kernel_str:    dict[str, str] = {}
@@ -133,7 +141,7 @@ class MultiFidelityGP:
 
         Parameters
         ----------
-        X_lf : (n_lf, 4) standardized inputs  [R, A, CC, VC]
+        X_lf : (n_lf, n_features) standardized inputs  [R, A, CC, VC, T, N]
         Y_lf : (n_lf, 2) standardized targets  [SEA, CFE]
         """
         print(f"[gp] Fitting LF-SEA GP  (n={len(X_lf)}) ...")
@@ -186,7 +194,7 @@ class MultiFidelityGP:
 
         Parameters
         ----------
-        X_hf : (n_hf, 4) standardized HF fine-tune inputs
+        X_hf : (n_hf, n_features) standardized HF fine-tune inputs
         Y_hf : (n_hf, 2) standardized HF fine-tune targets
         """
         deltas = self.compute_deltas(X_hf, Y_hf)
@@ -217,7 +225,7 @@ class MultiFidelityGP:
 
         Parameters
         ----------
-        X              : (n, 4) standardized inputs
+        X              : (n, n_features) standardized inputs
         return_std     : if True, also return posterior standard deviations
         use_correction : if False, return LF-only predictions (baseline comparison)
 
@@ -299,6 +307,7 @@ class MultiFidelityGP:
             "is_hf_fitted":      self.is_hf_fitted,
             "n_restarts":        self.n_restarts,
             "alpha":             self.alpha,
+            "n_features":        self.n_features,
             "lf_kernel_params":  self._lf_kernel_str,
             "delta_kernel_params": self._delta_kernel_str,
             "saved_at":          datetime.now().isoformat(timespec="seconds"),
@@ -321,6 +330,7 @@ class MultiFidelityGP:
         obj = cls.__new__(cls)
         obj.n_restarts = meta["n_restarts"]
         obj.alpha      = meta["alpha"]
+        obj.n_features = meta.get("n_features", LEGACY_N_FEATURES)   # files saved before (T, N) have no entry
         obj._lf_kernel_str    = meta.get("lf_kernel_params",    {})
         obj._delta_kernel_str = meta.get("delta_kernel_params", {})
 
@@ -333,8 +343,8 @@ class MultiFidelityGP:
             obj.gp_sea_delta = joblib.load(os.path.join(directory, "gp_sea_delta.pkl"))
             obj.gp_cfe_delta = joblib.load(os.path.join(directory, "gp_cfe_delta.pkl"))
         else:
-            obj.gp_sea_delta = GaussianProcessRegressor(kernel=_make_kernel(0.5), **kw)
-            obj.gp_cfe_delta = GaussianProcessRegressor(kernel=_make_kernel(0.5), **kw)
+            obj.gp_sea_delta = GaussianProcessRegressor(kernel=_make_kernel(0.5, n_features=obj.n_features), **kw)
+            obj.gp_cfe_delta = GaussianProcessRegressor(kernel=_make_kernel(0.5, n_features=obj.n_features), **kw)
         obj.is_hf_fitted = meta["is_hf_fitted"]
 
         print(f"[gp] Loaded from {directory}/  (saved {meta.get('saved_at', 'unknown')})")

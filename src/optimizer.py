@@ -53,7 +53,9 @@ import torch
 
 from sample import generate_sobol, apply_constraints, stratified_subsample
 from ml_models.predict import predict_gp, predict_mlp
-from ml_models.data_loader import MODELS_DIR, HF_CSV, FEATURE_COLS, load_scalers
+# This tool optimises the four geometry inputs of the legacy (N=6, T=0) family; it is not
+# yet (T, N)-aware, hence the legacy column list.
+from ml_models.data_loader import MODELS_DIR, HF_CSV, LEGACY_FEATURE_COLS as FEATURE_COLS, load_scalers
 from ml_models.mlp_model import SurrogateNet
 from active_sampler import (
     build_candidate_pool,
@@ -537,6 +539,12 @@ def _load_mlp(models_dir: str | None) -> tuple[SurrogateNet, object, object]:
     model = SurrogateNet.load(path)
     model.eval()
     x_sc, y_sc = load_scalers(md)
+    if x_sc.n_features_in_ != len(FEATURE_COLS):
+        print(f"[optimizer] ERROR: the model in {md} has {x_sc.n_features_in_} inputs "
+              f"([R, A, CC, VC, T, N]); this optimizer only supports the legacy "
+              f"{len(FEATURE_COLS)}-input model. Use a models directory that holds a legacy "
+              "model, or port the optimizer to the 6-input model.")
+        sys.exit(1)
     return model, x_sc, y_sc
 
 

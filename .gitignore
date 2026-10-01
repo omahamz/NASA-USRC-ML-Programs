@@ -6,43 +6,211 @@ other/
 # Trained model artifacts — GP pickles embed their full training data,
 # scalers.pkl encodes dataset statistics, and the plots display real
 # SEA/CFE values. None of it may leave the machine.
+# (models*/ also covers alternate dirs used with --models-dir, e.g. models_6in/)
 models/
+models*/
+
+# Generated output folders (optimizer / sampler / alpha-sweep / preflight
+# results, STEP batches written next to a points CSV, etc.)
+output/
+outputs/
+results/
+plots/
+runs/
+logs/
+*_stp/
 
 # Belt-and-braces: block serialized data / model formats everywhere,
 # in case files end up outside the folders above
 *.pkl
+*.pickle
 *.pt
 *.pth
+*.ckpt
+*.onnx
+*.safetensors
 *.h5
 *.hdf5
 *.joblib
 *.npy
 *.npz
+*.mat
+*.parquet
+*.feather
+*.sqlite
+*.sqlite3
+*.db
 *.zip
-*.xlsx
+*.7z
+*.tar
+*.gz
+*.rar
 
-# Block ALL csv files by default; explicitly allow only the Sobol
-# sample designs (input-space points only — no simulation outputs)
+# Spreadsheets / office docs / reports (may hold data or NASA-internal text)
+*.xlsx
+*.xls
+*.xlsm
+*.docx
+*.doc
+*.pptx
+*.pdf
+
+# Block ALL csv/tsv/txt/json by default. Simulation outputs, metrics files
+# (real SEA/CFE values), FD curves and run summaries all use these formats.
+# Explicitly allow only the Sobol sample designs (input-space points only —
+# no simulation outputs) and requirements.txt.
 *.csv
+*.tsv
+*.txt
+*.json
 !src/src_data/*.csv
+!src/src_data/*.json
+!requirements.txt
+
+# Block images by default (plots show real SEA/CFE values and geometry).
+# Allow only the Sobol input-space plots under src/src_data/.
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tif
+*.tiff
+*.svg
+!src/src_data/*.png
+
+# Notebooks embed cell outputs (data, plots) — keep them out
+*.ipynb
+
+# ─── Secrets / credentials / identifying config ─────────────────────
+# (docs/STP_AGENT_PIPELINE_PLAN.md plans a GEMINI_API_KEY in .env)
+.env
+.env.*
+!.env.example
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.token
+secrets.*
+credentials*
+id_rsa*
+id_ed25519*
+*.kdbx
+
+# Local tool / assistant config (permissions, absolute paths, machine state)
+.claude/settings.local.json
+CLAUDE.local.md
+.vscode/
+.idea/
+*.code-workspace
 
 # ─── Python ─────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
+*$py.class
 .venv/
 venv/
 env/
+ENV/
 .ipynb_checkpoints/
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Test / lint / type-check caches and coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# ─── Abaqus run artifacts (Automation/CompTest_PipelineParallel.py) ──
+# Models, results and scratch files from FE jobs — confidential geometry
+# and results. Job folders live outside the repo, but block them anyway.
+*.odb
+*.inp
+*.sim
+*.sta
+*.msg
+*.dat
+*.prt
+*.abq
+*.mdl
+*.stt
+*.res
+*.lck
+*.ipm
+*.cae
+*.jnl
+*.rpy
+*.rec
+*.fil
+abaqus*.rpy
+abaqus_acis.log
+abaqus.rpy*
 
 # ─── C# build output / generated CAD ───────────────────────────────
 bin/
 obj/
 .vs/
+*.user
+*.suo
+*.rsuser
+*.userprefs
+*.pdb
+*.exe
+*.dll
+*.nupkg
+packages/
+# SolidWorks / CAD parts, assemblies, drawings and neutral exchange formats
 *.stp
 *.step
+*.STP
+*.STEP
 *.SLDPRT
 *.sldprt
+*.SLDASM
+*.sldasm
+*.SLDDRW
+*.slddrw
+*.sldlfp
+*.sldprt.bak
+~$*
+*.igs
+*.iges
+*.x_t
+*.x_b
+*.sat
+*.stl
+*.3mf
+*.dxf
+*.dwg
+
+# ─── Logs / temp / backups ─────────────────────────────────────────
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.swp
+*~
 
 # ─── OS / editor ────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+desktop.ini
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk

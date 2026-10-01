@@ -3,10 +3,14 @@ PyTorch MLP surrogate model for joint prediction of SEA and CFE.
 
 Architecture
 ------------
-Input  (4)  →  Hidden-1 (64) + tanh  →  Hidden-2 (32) + tanh
+Input  (6)  →  Hidden-1 (64) + tanh  →  Hidden-2 (32) + tanh
             →  Hidden-3 (16) + tanh  →  Output (2, linear)
 
-Total parameters: ~2,962  (see docs/MLP_DESIGN.md for full justification)
+Inputs are [R, A, CC, VC, T, N]: four geometry parameters plus the two binary
+configuration flags (T: twist, N: 6 = hexagonal cells / 0 = ellipsoidal holes).
+
+Total parameters: 3,090  (2,962 for the legacy 4-input network; see docs/MLP_DESIGN.md).
+Legacy 4-input models still load: the architecture is read from the saved JSON.
 
 Design decisions
 ----------------
@@ -48,7 +52,8 @@ import torch
 import torch.nn as nn
 
 # Default architecture and transfer-learning freeze depth
-LAYER_SIZES         = [4, 64, 32, 16, 2]
+N_INPUTS            = 6     # R, A, CC, VC, T, N  (== len(data_loader.FEATURE_COLS); checked in tests)
+LAYER_SIZES         = [N_INPUTS, 64, 32, 16, 2]
 N_FREEZE_FOR_FINETUNE = 2   # freeze first 2 hidden layers in Phase 2
 
 
@@ -61,7 +66,7 @@ class SurrogateNet(nn.Module):
     ----------
     layer_sizes : list[int]
         Neuron counts per layer (input → hidden... → output).
-        Default [4, 64, 32, 16, 2] gives 3 hidden layers for this problem.
+        Default [6, 64, 32, 16, 2] gives 3 hidden layers for this problem.
     """
 
     def __init__(self, layer_sizes: list[int] = LAYER_SIZES):
@@ -101,9 +106,9 @@ class SurrogateNet(nn.Module):
         They receive no gradient updates during backpropagation, preserving
         the features learned during Phase-1 pre-training.
 
-        Calling freeze_until(2) on the default [4,64,32,16,2] architecture
-        freezes Hidden-1 and Hidden-2 (4→64 and 64→32) and leaves Hidden-3
-        and the output layer fully trainable.  This exposes 578 trainable
+        Calling freeze_until(2) on the default [6,64,32,16,2] architecture
+        freezes Hidden-1 and Hidden-2 (6→64 and 64→32) and leaves Hidden-3
+        and the output layer fully trainable.  This exposes 562 trainable
         parameters for the 98-sample HF fine-tune split — a ratio ~6× larger
         than the output-only case, while still protecting most pretrained
         knowledge.  (Yosinski et al., 2014)

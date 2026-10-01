@@ -14,7 +14,68 @@ python -m src.ml_models.train_gp
 
 # Predict (in Python)
 from src.ml_models import predict_mlp, predict_gp
+
+# Run the tests
+python -m pytest
 ```
+
+---
+
+## 0. Inputs: `[R, A, CC, VC, T, N]`
+
+The models take six inputs. `T` (0 = untwisted, 1 = twist-angle part) and `N` (6 = hexagonal cells,
+0 = ellipsoidal holes) are binary configuration flags that select the part family
+(`N6AShell`, `N6TAShell`, `N0AShell`, `N0TAShell`, ...).
+
+- **Legacy data** (no `N` column, constant `T = 0`) is read as `N = 6, T = 0`, so the pipeline still trains on
+  it (T and N then are constant inputs).
+- **Legacy 4-column inputs** to `predict_*` are padded with `T = 0, N = 6` (with a warning).
+- **Retraining replaces artifacts.** A `--models-dir` that already holds a model with a different input width
+  (for example your trained 4-input model in `models/`) is *not* overwritten unless you pass `--force`; use
+  e.g. `--models-dir models_6in`.
+- `active_sampler.py` and `alpha_sweep.py` stay 4-input tools (they score the legacy configuration through the
+  padding above). `optimizer.py` works on 4-input models only and exits with a message otherwise.
+
+### Sampling per configuration
+
+```bash
+# 256 Sobol points for each configuration that has derived constraints: (6,0) and (0,0)
+python src/sample.py --sobol 256 --OD 40 --L 50 --G 3 --seed 42 --propagate --sobol-instance Sample_new
+
+# only one family; re-running appends and continues the same streams
+python src/sample.py --sobol 64 --OD 40 --L 50 --G 3 --configs 0:0 --sobol-instance Sample_new
+
+python src/check_constraints.py Sample_new.csv --OD 40 --L 50 --G 3
+```
+
+`--configs` takes `N:T` pairs (`6:0,0:0`), names (`N6T0`), `all` (every configuration with derived constraints,
+the default) or `legacy` (= `6:0`). `T = 1` configurations are placeholders until their constraints are derived
+(edit `CONSTRAINT_SETS` in `src/constraints.py`); asking for one is an error. `K` is the number of points per
+configuration, and `--G` now also applies without `--propagate` (it used to be ignored for Sobol).
+
+### Checking constraints against SolidWorks
+
+The constraints are derived by hand; SwGen's rebuild results say what really builds. To check a configuration
+(for example after deriving the `T = 1` constraints):
+
+```bash
+python src/validate_constraints.py points --n 120 --out validate/points.csv        # unfiltered box sample
+SwGen.exe generate --part N0AShell.SLDPRT --csv validate/points.csv --out validate/out
+python src/validate_constraints.py compare validate/out/swgen_results.jsonl --config 0:0 --OD 40 --L 50 --G 3
+```
+
+The report shows how many accepted points failed to build (constraints too loose), how many rejected points do
+build (too strict), and per constraint which ones reject buildable designs.
+
+### From samples to STEP files
+
+```bash
+python src/stp_preflight.py Sample_new.csv --OD 40 --L 50 --G 3 --fidelity Shell --out batches/run1
+```
+
+writes one `R,A,CC,VC` CSV per configuration (SwGen has no `T`/`N` variables), `rejected.csv` with the reason
+for every point that must not be built, and prints the `SwGen generate` command for each part
+(see `Automation/SwGen/README.md`).
 
 ---
 
@@ -26,7 +87,7 @@ From the project root:
 pip install -r requirements.txt
 ```
 
-New dependencies added for the ML models: `torch` (PyTorch) and `joblib`.
+Dependencies added for the ML models: `torch` (PyTorch) and `joblib`; `pytest` runs the tests.
 
 Verify:
 
@@ -95,8 +156,14 @@ python -m src.ml_models.train_mlp --phase 2
 --seed INT          Random seed (default: 42)
 --epochs-p1 INT     Phase-1 epoch cap (default: 600)
 --epochs-p2 INT     Phase-2 epoch cap (default: 300)
---models-dir PATH   Directory to save models (default: models/)
+--models-dir PATH   Directory to save models, plots and metrics (default: models/)
+--lf-csv CSV [...]  LF processed-data CSV(s) (default: the legacy shell file)
+--hf-csv CSV [...]  HF processed-data CSV(s) (default: the legacy solid file)
+--force             Overwrite a models dir that holds a model with a different input width
 ```
+
+When the HF test set contains more than one `(N, T)` configuration, per-configuration R² / RMSE are printed and
+saved to `mlp_comparison_by_config.json` (pooled R² can hide a badly predicted configuration).
 
 ### What to watch during training
 
@@ -150,8 +217,14 @@ python -m src.ml_models.train_gp --phase correction
 ```
 --seed INT          Random seed (default: 42)
 --restarts INT      Kernel optimizer restarts (default: 5; more = slower but better)
---models-dir PATH   Directory to save models (default: models/)
+--models-dir PATH   Directory to save models, plots and metrics (default: models/)
+--lf-csv CSV [...]  LF processed-data CSV(s) (default: the legacy shell file)
+--hf-csv CSV [...]  HF processed-data CSV(s) (default: the legacy solid file)
+--force             Overwrite a models dir that holds a model with a different input width
 ```
+
+GP cost grows as O(n³): pooling several configurations into the LF set multiplies n, so expect much longer fits
+(and consider fewer `--restarts`) once LF data for all part families is added.
 
 ### Expected training time
 
@@ -188,8 +261,8 @@ delta-SEA kernel: 0.423**2 * RBF(length_scale=[...]) + WhiteKernel(noise=0.003)
 import numpy as np
 from src.ml_models import predict_mlp
 
-# Single design point: [R, A, CC, VC]
-X = np.array([[3.5, 60.0, 12.0, 6.0]])
+# Single design point: [R, A, CC, VC, T, N]   (T: 0/1, N: 0 or 6)
+X = np.array([[3.5, 60.0, 12.0, 6.0, 0, 6]])
 
 # High-fidelity model (recommended)
 sea, cfe = predict_mlp(X, phase='hf')
@@ -205,8 +278,8 @@ sea_lf, cfe_lf = predict_mlp(X, phase='lf')
 ```python
 from src.ml_models import predict_gp
 
-X = np.array([[3.5, 60.0, 12.0, 6.0],
-              [5.0, 45.0,  8.0, 5.0]])
+X = np.array([[3.5, 60.0, 12.0, 6.0, 0, 6],
+              [5.0, 45.0,  8.0, 5.0, 0, 0]])
 
 sea_mean, sea_std, cfe_mean, cfe_std = predict_gp(X)
 
@@ -243,6 +316,8 @@ X_candidates = np.column_stack([
     rng.uniform(30.0, 90.0, 1000),         # A
     rng.integers(4, 23, 1000).astype(float), # CC (will not be rounded by predict)
     rng.integers(4, 11, 1000).astype(float), # VC
+    np.zeros(1000),                        # T
+    np.full(1000, 6.0),                    # N
 ])
 
 sea, cfe = predict_mlp(X_candidates, phase='hf')
@@ -256,12 +331,14 @@ This lets you observe the model's interpolation between integer design points:
 
 ```python
 # How does the model interpolate between CC=12 and CC=13?
-X_sweep = np.array([[3.5, 60.0, cc, 6.0] for cc in np.linspace(12.0, 13.0, 11)])
+X_sweep = np.array([[3.5, 60.0, cc, 6.0, 0, 6] for cc in np.linspace(12.0, 13.0, 11)])
 sea, cfe = predict_mlp(X_sweep)
 ```
 
 Only physically valid integer values of CC and VC correspond to real simulation runs.
-A warning is raised if any input is outside the training domain.
+A warning is raised if any of R, A, CC, VC is outside the training domain. `T` and `N` are categorical:
+values other than {0, 1} / {0, 6} raise `ValueError`. A 4-column input `[R, A, CC, VC]` is accepted and means
+`T = 0, N = 6` (with a warning on 6-input models).
 
 ---
 
@@ -407,7 +484,7 @@ given (e.g., `--k 50` → 64 proposals, with a printed warning).
 # Refit correction GPs only (fast; LF GPs are unchanged)
 python -m src.ml_models.train_gp --phase correction
 
-# Retrain MLP Phase 2 (only 562/2962 params update; Phase 1 weights preserved)
+# Retrain MLP Phase 2 (only 562/3090 params update; Phase 1 weights preserved)
 python -m src.ml_models.train_mlp --phase 2
 ```
 
@@ -467,15 +544,17 @@ with open("models/mlp_finetuned_hf.json") as f:
     meta = json.load(f)
 print(meta)
 # {
-#   "layer_sizes": [4, 64, 32, 16, 2],
-#   "total_params": 2962,
+#   "layer_sizes": [6, 64, 32, 16, 2],
+#   "total_params": 3090,
 #   "phase": 2,
+#   "feature_cols": ["R", "A", "CC", "VC", "T", "N"],
 #   "frozen_layers": [0, 1],
 #   "trainable_params": 562,
 #   "epochs_run": 187,
 #   "best_val_loss": 0.23841,
 #   "hf_test_R2_SEA": 0.8932,
 #   "hf_test_R2_CFE": 0.7841,
+#   "hf_test_by_config": {"N6_T0": {...}, "N0_T0": {...}},   # only when >1 configuration is in the test set
 #   "hyperparams": {"lr": 0.0001, "wd": 0.001, "n_freeze": 2},
 #   "saved_at": "2026-06-01T14:23:11"
 # }
@@ -499,6 +578,9 @@ print(gp_meta["lf_kernel_params"])
 | GP fitting takes very long                          | Large n_restarts or n points          | Reduce `--restarts` flag (minimum 3)                                                     |
 | Phase-2 val loss higher than train loss immediately | HF dataset too small for current LR   | Reduce `--lr-p2` (not exposed yet: edit P2_LR in train_mlp.py)                           |
 | MLP CFE R² < 0.5 after Phase 1                      | CFE loss not learning                 | Monitor per-output losses in training output; may need longer training or different seed |
+| `SystemExit: ... already holds a 4-input model`     | `--models-dir` has a legacy model     | Use another `--models-dir`, or `--force` to overwrite                                    |
+| `ValueError: Column 'N' must contain only (0, 6)`   | Bad N/T value in a CSV or input       | N is 0 or 6, T is 0 or 1 (a trailing `!` in PD files is dropped automatically)           |
+| `ConstraintsNotDefinedError` from sampling          | Requested a `T = 1` configuration     | Derive its constraints in `src/constraints.py` first (they are placeholders)             |
 
 ---
 

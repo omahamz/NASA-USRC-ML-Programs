@@ -10,17 +10,25 @@ From the project root:
     python -m src.ml_models.train_mlp --phase 2        # Phase 2 only (Phase 1 must exist)
     python -m src.ml_models.train_mlp --seed 0         # different random seed
     python -m src.ml_models.train_mlp --epochs-p1 800  # override Phase-1 epoch cap
+    python -m src.ml_models.train_mlp --models-dir models_6in          # keep other artifacts untouched
+    python -m src.ml_models.train_mlp --lf-csv a_PD.csv b_PD.csv --hf-csv c_PD.csv   # several configs
+
+Inputs are [R, A, CC, VC, T, N].  CSVs without N / T columns (legacy campaign) are read as
+N=6, T=0.  A models dir that already holds a model with a different input width is never
+overwritten unless --force is given.
 
 Saved artifacts
 ---------------
-models/
+<models-dir>/   (default: models/)
   mlp_pretrained_lf.pt   + .json   Phase-1 weights and metadata
   mlp_finetuned_hf.pt    + .json   Phase-2 weights and metadata
   scalers.pkl                       StandardScaler objects (shared with GP)
+  mlp_comparison_metrics.json       LF-only vs transfer metrics on the HF test set
+  mlp_comparison_by_config.json     same, per (N, T) configuration (when >1 is present)
   plots/
     LC_Phase1_MLP.png               Phase-1 learning curves
     LC_Phase2_MLP.png               Phase-2 learning curves
-    Parity_MLP_LF.png               LF-only parity plot on HF test set
+    Parity_MLP_LF_only.png          LF-only parity plot on HF test set
     Parity_MLP_TL.png               Transfer-learning parity plot on HF test set
 """
 
@@ -38,17 +46,22 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from .data_loader import (
     DataSplits,
+    FEATURE_COLS,
     MODELS_DIR,
     TARGET_COLS,
+    guard_model_dir,
     load_data,
     save_scalers,
 )
 from .evaluate import (
     compute_metrics,
+    compute_metrics_by_config,
     learning_curve_plot,
     parity_plot,
+    print_metrics_by_config,
     print_metrics_table,
     save_metrics_json,
+    set_plots_dir,
 )
 from .mlp_model import LAYER_SIZES, N_FREEZE_FOR_FINETUNE, SurrogateNet
 
@@ -70,6 +83,18 @@ P2_WD         = 1e-3     # stronger WD: regularise on the smaller HF dataset
 P2_BATCH      = None     # None → full-batch (all HF fine-tune samples per step)
 P2_PATIENCE   = 30
 P2_FREEZE     = N_FREEZE_FOR_FINETUNE   # number of hidden layers to freeze
+
+
+# ---------------------------------------------------------------------------
+# Per-configuration reporting
+# ---------------------------------------------------------------------------
+
+def _by_config(splits: DataSplits, Y_true: np.ndarray, Y_pred: np.ndarray) -> dict:
+    """Per-(N, T) HF-test metrics; empty unless the test set holds more than one configuration."""
+    labels = splits.config_hf_test
+    if labels is None or len(np.unique(labels)) < 2:
+        return {}
+    return compute_metrics_by_config(Y_true, Y_pred, labels)
 
 
 # ---------------------------------------------------------------------------
@@ -194,9 +219,9 @@ def run_phase1(
     layer_sizes: list[int] = LAYER_SIZES,
 ) -> SurrogateNet:
     """
-    Pre-train the MLP on the 750-point LF (shell) training split.
+    Pre-train the MLP on the LF (shell) training split.
 
-    The model learns the mapping (R, A, CC, VC) → (SEA, CFE) from shell
+    The model learns the mapping (R, A, CC, VC, T, N) → (SEA, CFE) from shell
     simulation data.  All layers are trainable; Adam optimizer with moderate
     L2 regularization.
 
@@ -232,6 +257,8 @@ def run_phase1(
     Y_true = splits.y_scaler.inverse_transform(splits.Y_hf_test)
     m = compute_metrics(Y_true, Y_pred)
     print(f"\n  [Phase1] HF test:  SEA R2={m['SEA']['R2']:.4f}  CFE R2={m['CFE']['R2']:.4f}")
+    by_cfg = _by_config(splits, Y_true, Y_pred)
+    print_metrics_by_config({"MLP Phase1": by_cfg})
 
     # Save model
     save_path = os.path.join(models_dir, "mlp_pretrained_lf.pt")
@@ -239,11 +266,13 @@ def run_phase1(
         save_path,
         metadata={
             "phase": 1,
+            "feature_cols": list(splits.feature_cols or FEATURE_COLS),
             "n_lf_train": len(splits.X_lf_train),
             "epochs_run": history["best_epoch"],
             "best_val_loss": history["best_val"],
             "hf_test_R2_SEA": m["SEA"]["R2"],
             "hf_test_R2_CFE": m["CFE"]["R2"],
+            "hf_test_by_config": by_cfg,
             "hyperparams": {"lr": lr, "wd": wd, "batch_size": batch_size},
         },
     )
@@ -266,7 +295,7 @@ def run_phase2(
     n_freeze: int = P2_FREEZE,
 ) -> SurrogateNet:
     """
-    Fine-tune the pre-trained MLP on the 98-point HF (solid) fine-tune split.
+    Fine-tune the pre-trained MLP on the HF (solid) fine-tune split.
 
     The first n_freeze hidden layers are frozen (requires_grad=False).  Only the
     last hidden layer and the output layer are updated — they adapt the pre-trained
@@ -326,6 +355,8 @@ def run_phase2(
     Y_true = splits.y_scaler.inverse_transform(splits.Y_hf_test)
     m = compute_metrics(Y_true, Y_pred)
     print(f"\n  [Phase2] HF test:  SEA R2={m['SEA']['R2']:.4f}  CFE R2={m['CFE']['R2']:.4f}")
+    by_cfg = _by_config(splits, Y_true, Y_pred)
+    print_metrics_by_config({"MLP Phase2": by_cfg})
 
     # Save
     save_path = os.path.join(models_dir, "mlp_finetuned_hf.pt")
@@ -333,6 +364,7 @@ def run_phase2(
         save_path,
         metadata={
             "phase": 2,
+            "feature_cols": list(splits.feature_cols or FEATURE_COLS),
             "n_hf_finetune": n_ft,
             "frozen_layers": model.frozen_layers(),
             "trainable_params": model.trainable_params(),
@@ -340,6 +372,7 @@ def run_phase2(
             "best_val_loss": history["best_val"],
             "hf_test_R2_SEA": m["SEA"]["R2"],
             "hf_test_R2_CFE": m["CFE"]["R2"],
+            "hf_test_by_config": by_cfg,
             "hyperparams": {"lr": lr, "wd": wd, "n_freeze": n_freeze},
         },
     )
@@ -358,28 +391,32 @@ def compare_phases(
     splits: DataSplits,
     model_lf: SurrogateNet,
     model_hf: SurrogateNet,
+    models_dir: str = MODELS_DIR,
 ) -> dict:
     """
     Evaluate and compare LF-only vs Transfer-Learning MLP on the HF test set.
-    Saves parity plots and a metrics JSON.
+    Saves parity plots and metrics JSON(s) into models_dir.  When the test set holds
+    more than one (N, T) configuration, per-configuration metrics are printed and saved too.
     """
     Y_true = splits.y_scaler.inverse_transform(splits.Y_hf_test)
 
     all_metrics: dict[str, dict] = {}
+    by_config: dict[str, dict] = {}
     for label, model in [("MLP (LF only)", model_lf), ("MLP (TL)", model_hf)]:
         model.eval()
         with torch.no_grad():
             Y_pred_std = model(torch.FloatTensor(splits.X_hf_test)).numpy()
         Y_pred = splits.y_scaler.inverse_transform(Y_pred_std)
         all_metrics[label] = compute_metrics(Y_true, Y_pred)
+        by_config[label] = _by_config(splits, Y_true, Y_pred)
         parity_plot(Y_true, Y_pred, f"Parity_{label.replace(' ', '_').replace('(', '').replace(')', '')}")
 
     print_metrics_table(all_metrics)
 
-    models_dir = os.path.dirname(
-        os.path.join(MODELS_DIR, "mlp_pretrained_lf.pt")
-    )
     save_metrics_json(all_metrics, os.path.join(models_dir, "mlp_comparison_metrics.json"))
+    if any(by_config.values()):
+        print_metrics_by_config(by_config)
+        save_metrics_json(by_config, os.path.join(models_dir, "mlp_comparison_by_config.json"))
     return all_metrics
 
 
@@ -388,7 +425,10 @@ def compare_phases(
 # ---------------------------------------------------------------------------
 
 def main(args: argparse.Namespace) -> None:
-    splits = load_data(seed=args.seed)
+    guard_model_dir(args.models_dir, len(FEATURE_COLS), force=args.force)
+    set_plots_dir(os.path.join(args.models_dir, "plots"))
+
+    splits = load_data(seed=args.seed, lf_csv=args.lf_csv, hf_csv=args.hf_csv)
     save_scalers(splits, models_dir=args.models_dir)
 
     model_lf = model_hf = None
@@ -409,13 +449,13 @@ def main(args: argparse.Namespace) -> None:
         )
 
     if model_lf is not None and model_hf is not None:
-        compare_phases(splits, model_lf, model_hf)
+        compare_phases(splits, model_lf, model_hf, models_dir=args.models_dir)
     elif model_hf is not None:
         # Phase 2 only: load LF model for comparison
         pt_path = os.path.join(args.models_dir, "mlp_pretrained_lf.pt")
         if os.path.isfile(pt_path):
             model_lf = SurrogateNet.load(pt_path)
-            compare_phases(splits, model_lf, model_hf)
+            compare_phases(splits, model_lf, model_hf, models_dir=args.models_dir)
 
 
 if __name__ == "__main__":
@@ -428,6 +468,13 @@ if __name__ == "__main__":
     parser.add_argument("--epochs-p1", type=int,   default=P1_EPOCHS)
     parser.add_argument("--epochs-p2", type=int,   default=P2_EPOCHS)
     parser.add_argument("--models-dir", default=MODELS_DIR)
+    parser.add_argument("--lf-csv", nargs="+", default=None, metavar="CSV",
+                        help="LF processed-data CSV(s) (default: the legacy shell file). "
+                             "Missing N/T columns are read as N=6, T=0.")
+    parser.add_argument("--hf-csv", nargs="+", default=None, metavar="CSV",
+                        help="HF processed-data CSV(s) (default: the legacy solid file).")
+    parser.add_argument("--force", action="store_true",
+                        help="Overwrite a --models-dir that holds a model with a different input width.")
     args = parser.parse_args()
 
     # Coerce --phase to int if numeric

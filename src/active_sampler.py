@@ -65,7 +65,8 @@ from scipy.stats import norm
 
 from sample import generate_sobol, stratified_subsample
 from ml_models.predict import predict_gp
-from ml_models.data_loader import LF_CSV, HF_CSV, MODELS_DIR, FEATURE_COLS
+# Legacy (N=6, T=0) tool: it proposes R, A, CC, VC only; predict_gp pads T=0, N=6 for 6-input models.
+from ml_models.data_loader import LF_CSV, HF_CSV, MODELS_DIR, LEGACY_FEATURE_COLS as FEATURE_COLS
 
 
 # ---------------------------------------------------------------------------
