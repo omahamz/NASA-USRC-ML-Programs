@@ -1,7 +1,8 @@
 """
 Sampler tests (src/sample.py): per-configuration streams, constraints, persistence, subsampling.
 
-K always means "K points per configuration"; T and N are stratification factors, not Sobol dimensions.
+K always means "K points per configuration" (Sobol: at least K, since every feasible point of a power-of-2
+raw prefix is kept); T and N are stratification factors, not Sobol dimensions.
 """
 
 import json
@@ -12,6 +13,7 @@ import sys
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import qmc
 
 import check_constraints as CK
 import constraints as C
@@ -33,18 +35,18 @@ class TestOutputShape:
     def test_default_is_the_legacy_single_configuration(self):
         df = S.generate_sobol(k=16, seed=1, OD=OD, L=L, G=G)
         assert list(df.columns) == ["R", "A", "CC", "VC", "T", "N"]
-        assert len(df) == 16 and (df["N"] == 6).all() and (df["T"] == 0).all()
+        assert len(df) >= 16 and (df["N"] == 6).all() and (df["T"] == 0).all()
 
     @pytest.mark.parametrize("cfg", BOTH)
     def test_every_sampled_point_is_feasible_for_its_configuration(self, cfg):
         df = S.generate_sobol(k=32, seed=3, OD=OD, L=L, G=G, configs=[cfg])
-        assert len(df) == 32
+        assert len(df) >= 32
         assert (df["N"] == cfg[0]).all() and (df["T"] == cfg[1]).all()
         assert feasible(df).all()
 
     def test_k_is_per_configuration(self):
         df = S.generate_sobol(k=16, seed=2, OD=OD, L=L, G=G, configs=BOTH)
-        assert len(df) == 32 and count(df, 6, 0) == 16 and count(df, 0, 0) == 16
+        assert len(df) == count(df, 6, 0) + count(df, 0, 0) and count(df, 6, 0) >= 16 and count(df, 0, 0) >= 16
         assert feasible(df).all()
 
     def test_values_stay_inside_the_design_box_and_integers_are_integers(self):
@@ -59,7 +61,7 @@ class TestOutputShape:
         assert len(df) == 64 and not feasible(df).all()
 
     def test_k_is_rounded_up_to_a_power_of_two(self, capsys):
-        df = S.generate_sobol(k=10, seed=6, OD=OD, L=L, G=G, configs=[(6, 0)])
+        df = S.generate_sobol(k=10, seed=6, configs=[(6, 0)])          # unconstrained: exactly k
         assert len(df) == 16
         assert "not a power of 2" in capsys.readouterr().out
 
@@ -148,6 +150,7 @@ class TestReproducibility:
         old = pd.read_csv(os.path.join(os.path.dirname(S.__file__), "src_data", "Sample_OD40L50G3_New.csv"))
         new = S.generate_sobol(k=1024, seed=42, OD=OD, L=L, G=G, configs=[(6, 0)],
                                domains={(6, 0): S.propagate_domains(OD, L, G, (6, 0))})
+        new = new.head(1024)          # the old sampler kept the first 1024 feasible points of the stream
         key = ["R", "A", "CC", "VC"]
         old_keys = set(map(tuple, old[key].round(2).to_numpy()))
         new_keys = set(map(tuple, new[key].round(2).to_numpy()))
@@ -178,7 +181,7 @@ class TestPropagation:
     def test_sampling_inside_propagated_domains(self):
         domains = {cfg: S.propagate_domains(OD, L, G, cfg) for cfg in BOTH}
         df = S.generate_sobol(k=16, seed=3, OD=OD, L=L, G=G, domains=domains, configs=BOTH)
-        assert len(df) == 32 and feasible(df).all()
+        assert count(df, 6, 0) >= 16 and count(df, 0, 0) >= 16 and feasible(df).all()
 
     def test_a_flat_domains_dict_cannot_serve_several_configurations(self):
         flat = S.propagate_domains(OD, L, G, (6, 0))
@@ -194,14 +197,14 @@ class TestPersistence:
         second = S.generate_sobol(k=8, seed=7, instance=inst, OD=OD, L=L, G=G, configs=BOTH)
         state2 = json.load(open(inst + ".sobol_state.json"))
 
-        assert len(first) == 16 and len(second) == 32
-        pd.testing.assert_frame_equal(second.iloc[:16].reset_index(drop=True), first.reset_index(drop=True))
+        assert len(first) >= 16 and len(second) >= len(first) + 16
+        pd.testing.assert_frame_equal(second.iloc[:len(first)].reset_index(drop=True), first.reset_index(drop=True))
         for key in ("N6_T0", "N0_T0"):
             assert state2["configs"][key]["num_generated"] > state1["configs"][key]["num_generated"] > 0
         assert not second.duplicated(subset=["R", "A", "CC", "VC", "T", "N"]).any()
         assert state2["version"] == 2 and state2["seed"] == 7 and state2["G"] == G
         assert feasible(second).all()
-        assert pd.read_csv(inst + ".csv").shape == (32, 6)
+        assert pd.read_csv(inst + ".csv").shape == (len(second), 6)
 
     def test_resume_ignores_a_different_seed_argument(self, tmp_path):
         a, b = str(tmp_path / "a"), str(tmp_path / "b")
@@ -214,11 +217,11 @@ class TestPersistence:
 
     def test_a_new_configuration_can_join_an_existing_instance(self, tmp_path):
         inst = str(tmp_path / "grow")
-        S.generate_sobol(k=8, seed=7, instance=inst, OD=OD, L=L, G=G, configs=[(6, 0)])
+        first = S.generate_sobol(k=8, seed=7, instance=inst, OD=OD, L=L, G=G, configs=[(6, 0)])
         full = S.generate_sobol(k=8, seed=7, instance=inst, OD=OD, L=L, G=G, configs=[(0, 0)])
         state = json.load(open(inst + ".sobol_state.json"))
         assert set(state["configs"]) == {"N6_T0", "N0_T0"}
-        assert count(full, 6, 0) == 8 and count(full, 0, 0) == 8
+        assert count(full, 6, 0) == len(first) and count(full, 0, 0) >= 8
 
     def test_version_1_state_and_four_column_csv_are_migrated(self, tmp_path):
         inst = str(tmp_path / "legacy")
@@ -229,7 +232,7 @@ class TestPersistence:
                   open(inst + ".sobol_state.json", "w"))
 
         full = S.generate_sobol(k=8, seed=1234, instance=inst, OD=OD, L=L, G=G, configs=[(6, 0)])
-        assert list(full.columns) == ["R", "A", "CC", "VC", "T", "N"] and len(full) == 16
+        assert list(full.columns) == ["R", "A", "CC", "VC", "T", "N"] and len(full) >= 16
         assert (full.iloc[:8]["T"] == 0).all() and (full.iloc[:8]["N"] == 6).all()
 
         state = json.load(open(inst + ".sobol_state.json"))
@@ -269,7 +272,10 @@ class TestSubsampling:
     @pytest.mark.parametrize("strategy", ["random", "maxmin"])
     def test_subsample_is_spread_across_configurations(self, sample, strategy):
         sub = S.stratified_subsample(sample, 10, strategy=strategy, seed=1)
-        assert len(sub) == 10 and count(sub, 6, 0) == 5 and count(sub, 0, 0) == 5
+        sizes = {"0_0": count(sample, 0, 0), "6_0": count(sample, 6, 0)}
+        expected = S._allocate(10, sizes)
+        assert len(sub) == 10 and count(sub, 6, 0) == expected["6_0"] and count(sub, 0, 0) == expected["0_0"]
+        assert min(expected.values()) >= 1
 
     @pytest.mark.parametrize("strategy", ["random", "maxmin"])
     def test_subsample_of_one_configuration_and_edge_sizes(self, sample, strategy):
@@ -309,7 +315,8 @@ class TestCli:
                                           "--seed", "1", "--sobol-output", "out.csv"])
         S.main()
         df = pd.read_csv("out.csv")
-        assert list(df.columns) == ["R", "A", "CC", "VC", "T", "N"] and len(df) == 16      # 8 x 2 default configs
+        assert list(df.columns) == ["R", "A", "CC", "VC", "T", "N"]                         # >= 8 x 2 default configs
+        assert count(df, 6, 0) >= 8 and count(df, 0, 0) >= 8
         assert sorted(df["N"].unique()) == [0, 6] and (df["T"] == 0).all()
 
         out = CK.check_constraints("out.csv", G=3.0, L=50.0, OD=40.0)
@@ -373,3 +380,58 @@ class TestCheckConstraintsScript:
         pd.DataFrame({"R": [3.0], "CC": [12], "VC": [5], "N": [3]}).to_csv(csv2, index=False)
         with pytest.raises(SystemExit):
             CK.check_constraints(str(csv2), G=3.0, L=50.0, OD=40.0)
+
+
+def sobol_reference(seed, cfg, n_raw, domains=None):
+    """Every feasible point among the first n_raw draws of cfg's stream, computed independently."""
+    params = S.domains_to_params(domains) if domains is not None else S.PARAMS
+    engine = qmc.Sobol(d=len(params), scramble=True, seed=S._config_seed(seed, cfg))
+    batch = S._attach_config(S._raw_sobol_to_df(engine.random(n_raw), params=params), cfg)
+    return S.apply_constraints(batch, OD, L, G, verbose=False).reset_index(drop=True)[S.COLUMN_ORDER]
+
+
+def rows_of(df, cfg):
+    return df[(df["N"] == cfg[0]) & (df["T"] == cfg[1])].reset_index(drop=True)
+
+
+class TestCleanSobolStream:
+    """The sample is always 'every feasible point of a power-of-2 Sobol prefix': nothing is thinned or skipped."""
+
+    @pytest.mark.parametrize("cfg", BOTH)
+    def test_a_fresh_sample_is_every_feasible_point_of_a_power_of_two_prefix(self, cfg, tmp_path):
+        inst = str(tmp_path / "fresh")
+        df = S.generate_sobol(k=64, seed=11, instance=inst, OD=OD, L=L, G=G, configs=[cfg])
+        n_raw = json.load(open(inst + ".sobol_state.json"))["configs"][C.config_label(cfg)]["num_generated"]
+        assert S._is_power_of_2(n_raw) and len(df) >= 64
+        pd.testing.assert_frame_equal(df, sobol_reference(11, cfg, n_raw), check_dtype=False)
+
+    def test_resume_extends_the_stream_to_the_next_power_of_two_without_gaps(self, tmp_path):
+        inst = str(tmp_path / "grow")
+        S.generate_sobol(k=32, seed=5, instance=inst, OD=OD, L=L, G=G, configs=BOTH)
+        n1 = {k: v["num_generated"] for k, v in json.load(open(inst + ".sobol_state.json"))["configs"].items()}
+        full = S.generate_sobol(k=32, seed=5, instance=inst, OD=OD, L=L, G=G, configs=BOTH)
+        state = json.load(open(inst + ".sobol_state.json"))
+        for cfg in BOTH:
+            n2 = state["configs"][C.config_label(cfg)]["num_generated"]
+            assert S._is_power_of_2(n2) and n2 > n1[C.config_label(cfg)]
+            pd.testing.assert_frame_equal(rows_of(full, cfg), sobol_reference(5, cfg, n2), check_dtype=False)
+
+    def test_prefixes_identify_balanced_leading_subsets(self, tmp_path):
+        """state['prefixes'][2^m] = how many leading rows came from the first 2^m draws (e.g. an HF subset)."""
+        inst = str(tmp_path / "pre")
+        S.generate_sobol(k=16, seed=3, instance=inst, OD=OD, L=L, G=G, configs=BOTH)
+        full = S.generate_sobol(k=64, seed=3, instance=inst, OD=OD, L=L, G=G, configs=BOTH)
+        state = json.load(open(inst + ".sobol_state.json"))
+        for cfg in BOTH:
+            prefixes = state["configs"][C.config_label(cfg)]["prefixes"]
+            assert len(prefixes) >= 2 and all(S._is_power_of_2(int(n)) for n in prefixes)
+            for n_raw, n_rows in prefixes.items():
+                pd.testing.assert_frame_equal(rows_of(full, cfg).head(n_rows),
+                                              sobol_reference(3, cfg, int(n_raw)), check_dtype=False)
+
+    def test_propagated_domains_keep_the_clean_prefix(self, tmp_path):
+        inst = str(tmp_path / "prop")
+        dom = S.propagate_domains(OD, L, G, (6, 0))
+        df = S.generate_sobol(k=32, seed=9, instance=inst, OD=OD, L=L, G=G, domains={(6, 0): dom}, configs=[(6, 0)])
+        n_raw = json.load(open(inst + ".sobol_state.json"))["configs"]["N6_T0"]["num_generated"]
+        pd.testing.assert_frame_equal(df, sobol_reference(9, (6, 0), n_raw, domains=dom), check_dtype=False)

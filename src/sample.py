@@ -8,7 +8,8 @@ Every design point is  [R, A, CC, VC, T, N]:
 
 T and N are NOT extra Sobol/LHS dimensions.  Each (N, T) configuration gets its own
 4-D stream, its own geometric constraints (src/constraints.py) and its own domain
-propagation.  K always means "K points per configuration".  Configurations without
+propagation.  K always means "K points per configuration" (for Sobol: at least K, see
+generate_sobol).  Configurations without
 derived constraints (T = 1 for now) cannot be sampled.
 
 Usage:
@@ -525,6 +526,9 @@ def _save_sobol_state(instance: str, state: dict) -> None:
       "configs": {
         "N6_T0": {
           "num_generated": <int>,   # raw Sobol draws so far (used by fast_forward on resume)
+          "prefixes": {"<2^m>": <rows>, ...},  # feasible rows of this configuration (in CSV
+                                    # order) produced by the first 2^m raw draws; the first
+                                    # <rows> rows are a balanced Sobol prefix (e.g. an HF subset)
           "domains": {"R": [lo, hi], "A": [lo, hi], "CC": [lo, hi], "VC": [lo, hi]}
         },
         "N0_T0": { ... }
@@ -561,18 +565,26 @@ def generate_sobol(
     instance: str | None = None,
     OD: float | None = None,
     L: float | None = None,
-    max_attempts: int = 500,
+    max_attempts: int = 16,
     domains: dict | None = None,
     G: float | None = None,
     configs=None,
 ) -> pd.DataFrame:
     """
-    Generate k Sobol points per configuration, optionally appending to a named persistent instance.
+    Generate at least k Sobol points per configuration, optionally appending to a named
+    persistent instance.
+
+    Each configuration's raw Sobol stream is always extended to a power-of-2 length
+    (n_prev -> 2^m draws) and EVERY feasible point among the new draws is kept, so the
+    accumulated sample is exactly "the feasible points of the first 2^m Sobol draws" and
+    keeps the sequence's balance properties when it is resumed later.  The number of
+    returned points is therefore >= k and depends on the constraint acceptance rate
+    (unconstrained, a fresh stream returns exactly k).
 
     Parameters
     ----------
     k : int
-        Number of NEW valid points requested for EACH configuration. Must be a power of 2;
+        Minimum number of NEW valid points for EACH configuration. Must be a power of 2;
         if not, rounded up to the next power of 2 with a warning.
     seed : int or None
         Base seed for the Sobol engines (configuration streams use seed + a fixed offset;
@@ -589,8 +601,8 @@ def generate_sobol(
     OD, L : float or None
         Constraint constants. Both must be provided to enable constraint filtering.
     max_attempts : int
-        Maximum blocks of k draws per configuration when constraints knock out points
-        (ellipsoidal holes accept only ~6 % of the box, so this is generous).
+        Maximum rounds per configuration; each round doubles the raw stream length
+        (every implemented configuration accepts ~30 % of the box, so 2-3 rounds is typical).
     domains : dict or None
         Propagated domains from propagate_domains(). A flat dict is only valid for a
         single configuration; for several pass {(N, T): domains}. If provided, sampling
@@ -650,31 +662,56 @@ def generate_sobol(
         if n_prev > 0:
             engine.fast_forward(n_prev)
 
+        # Rows of this configuration already in the instance (row order = stream order).
+        n_rows_prev = 0
+        if existing_df is not None:
+            n_rows_prev = int(((existing_df["N"] == cfg[0]) & (existing_df["T"] == cfg[1])).sum())
+        prefixes = dict(cstate.get("prefixes") or {})
+
+        # The stream always stops on a power of 2 so the raw draws keep Sobol's balance
+        # properties, and every feasible point drawn is kept (no thinning).  Each round
+        # doubles the stream until at least k new points are feasible.
         collected: list[pd.DataFrame] = []
         total_valid = 0
-        total_drawn = 0
-        attempts    = 0
+        total       = n_prev
+        target      = _next_power_of_2(max(n_prev + 1, k))
+        maxn        = getattr(engine, "maxn", 2 ** 30)
 
-        for attempts in range(1, max_attempts + 1):
-            raw = engine.random(k)
-            total_drawn += k
+        for _ in range(max_attempts):
+            if target > maxn:
+                print(f"  Warning [{key}]: Sobol stream exhausted at {total} draws.")
+                break
+            start = total
+            raw = engine.random(target - start)
+            total = target
             batch = _attach_config(_raw_sobol_to_df(raw, params=params), cfg)
             valid = apply_constraints(batch, OD, L, G_eff, verbose=False) if use_constraints else batch
+            keep = (evaluate(batch, OD, L, G_eff)["feasible"].to_numpy(dtype=bool) if use_constraints
+                    else np.ones(len(batch), dtype=bool))
+            # Record every power-of-2 prefix that ends inside this round, not just the round's end.
+            p = _next_power_of_2(start + 1)
+            while p <= total:
+                prefixes[str(p)] = n_rows_prev + total_valid + int(keep[:p - start].sum())
+                p *= 2
             collected.append(valid)
             total_valid += len(valid)
             if total_valid >= k:
                 break
+            target *= 2
         else:
             print(f"  Warning [{key}]: only {total_valid}/{k} valid points "
-                  f"after {max_attempts} attempts.")
+                  f"after {max_attempts} doubling round(s).")
 
-        accept = 100.0 * total_valid / total_drawn if total_drawn else 0.0
-        print(f"  [{key}] {min(total_valid, k)}/{k} valid points "
-              f"({total_drawn} drawn in {attempts} block(s), {accept:.1f}% accepted)")
+        drawn  = total - n_prev
+        accept = 100.0 * total_valid / drawn if drawn else 0.0
+        print(f"  [{key}] {total_valid} new valid points (>= {k} requested; stream {n_prev} -> {total} "
+              f"draws, {accept:.1f}% accepted)")
 
-        new_frames.append(pd.concat(collected, ignore_index=True).head(k))
+        new_frames.append(pd.concat(collected, ignore_index=True) if collected
+                          else pd.DataFrame(columns=COLUMN_ORDER))
         state["configs"][key] = {
-            "num_generated": n_prev + total_drawn,
+            "num_generated": total,
+            "prefixes":      prefixes,
             "domains":       _domains_record(dom),
         }
 
@@ -863,7 +900,9 @@ def parse_args():
                         help="Column to sort by when using the 'random' stratified strategy.")
     # --- Sobol ---
     parser.add_argument("--sobol", type=int, default=None, metavar="K",
-                        help="Generate K Sobol points per configuration (rounded up to next power of 2 if needed).")
+                        help="Generate at least K Sobol points per configuration (K rounded up to a power of 2). "
+                             "The raw stream is extended to a power-of-2 length and every feasible point is "
+                             "kept, so the count is usually above K.")
     parser.add_argument("--sobol-output", type=str, default="sobol_samples.csv",
                         dest="sobol_output",
                         help="Output CSV for a standalone Sobol sample (default: sobol_samples.csv). "

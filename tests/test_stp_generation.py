@@ -540,7 +540,7 @@ class TestSamplerFeedsPreflight:
         df = S.generate_sobol(k=32, seed=11, OD=OD, L=L, G=G, configs=[(6, 0), (0, 0)])
         res = P.preflight(df, OD, L, G)
         assert res.rejected.empty, res.rejected.to_string()
-        assert len(res.accepted) == 64 and res.accepted["stem"].is_unique
+        assert len(res.accepted) == len(df) and res.accepted["stem"].is_unique
         assert set(res.accepted["part"]) == {"N6AShell.SLDPRT", "N0AShell.SLDPRT"}
 
 

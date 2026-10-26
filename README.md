@@ -106,7 +106,10 @@ metrics, and plots) are written to `models/` locally.
 `src/sample.py` generates Sobol (`--sobol K`) or Latin hypercube (`--k K`) sample designs subject to
 the geometric manufacturability constraints of each part family. `T` and `N` are not extra
 sampling dimensions: every `(N, T)` configuration gets its own 4-D stream and its own constraints
-(`src/constraints.py`), and `K` means *K points per configuration*.
+(`src/constraints.py`), and `K` means *K points per configuration* (for Sobol *at least* K: the raw
+stream always ends on a power of 2 and every feasible point is kept, so samples stay balanced when resumed).
+The v2 training-data plan (counts, seeds, HF selection, SwGen commands) is in
+[docs/SAMPLING_PLAN.md](docs/SAMPLING_PLAN.md).
 
 | Configuration | Constraints | Box acceptance |
 |---|---|---|

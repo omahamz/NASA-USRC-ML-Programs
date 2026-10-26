@@ -53,6 +53,14 @@ the default) or `legacy` (= `6:0`). `T = 1` configurations are placeholders unti
 (edit `CONSTRAINT_SETS` in `src/constraints.py`); asking for one is an error. `K` is the number of points per
 configuration, and `--G` now also applies without `--propagate` (it used to be ignored for Sobol).
 
+For Sobol, `K` is a minimum. Each configuration's raw stream is extended to a power-of-2 length and every
+feasible point in it is kept, so the sample is always *all feasible points of the first 2^m Sobol draws*. That
+keeps the sequence balanced when an instance is resumed. With ~30-37 % acceptance, `--sobol 1024` stops at 4096
+draws and gives ~1300-1500 points per configuration; `--sobol 512` gives ~650-760. Resuming always at least doubles
+the stream. `NAME.sobol_state.json` stores, per configuration, `prefixes = {2^m: rows}`: the first `rows` rows of
+that configuration in `NAME.csv` are the feasible points of the first `2^m` draws, i.e. a balanced leading subset
+(use it to pick the HF points as the first points of the LF sample).
+
 ### Checking constraints against SolidWorks
 
 The constraints are derived by hand; SwGen's rebuild results say what really builds. To check a configuration
