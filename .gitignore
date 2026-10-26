@@ -214,3 +214,6 @@ desktop.ini
 Desktop.ini
 $RECYCLE.BIN/
 *.lnk
+
+# SolidWorks validation runs (rebuild results, STEP files, reports)
+validation_results/

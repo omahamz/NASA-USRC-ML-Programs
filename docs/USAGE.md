@@ -49,8 +49,8 @@ python src/check_constraints.py Sample_new.csv --OD 40 --L 50 --G 3
 ```
 
 `--configs` takes `N:T` pairs (`6:0,0:0`), names (`N6T0`), `all` (every configuration with derived constraints,
-the default) or `legacy` (= `6:0`). `T = 1` configurations are placeholders until their constraints are derived
-(edit `CONSTRAINT_SETS` in `src/constraints.py`); asking for one is an error. `K` is the number of points per
+the default) or `legacy` (= `6:0`). `(N=0, T=1)` is a placeholder until its constraints are derived
+(edit `CONSTRAINT_SETS` in `src/constraints.py`); asking for it is an error. `K` is the number of points per
 configuration, and `--G` now also applies without `--propagate` (it used to be ignored for Sobol).
 
 For Sobol, `K` is a minimum. Each configuration's raw stream is extended to a power-of-2 length and every
@@ -64,7 +64,7 @@ that configuration in `NAME.csv` are the feasible points of the first `2^m` draw
 ### Checking constraints against SolidWorks
 
 The constraints are derived by hand; SwGen's rebuild results say what really builds. To check a configuration
-(for example after deriving the `T = 1` constraints):
+(for example after deriving the `(N=0, T=1)` constraints):
 
 ```bash
 python src/validate_constraints.py points --n 120 --out validate/points.csv        # unfiltered box sample
@@ -588,7 +588,7 @@ print(gp_meta["lf_kernel_params"])
 | MLP CFE R² < 0.5 after Phase 1                      | CFE loss not learning                 | Monitor per-output losses in training output; may need longer training or different seed |
 | `SystemExit: ... already holds a 4-input model`     | `--models-dir` has a legacy model     | Use another `--models-dir`, or `--force` to overwrite                                    |
 | `ValueError: Column 'N' must contain only (0, 6)`   | Bad N/T value in a CSV or input       | N is 0 or 6, T is 0 or 1 (a trailing `!` in PD files is dropped automatically)           |
-| `ConstraintsNotDefinedError` from sampling          | Requested a `T = 1` configuration     | Derive its constraints in `src/constraints.py` first (they are placeholders)             |
+| `ConstraintsNotDefinedError` from sampling          | Requested `(N=0, T=1)`                | Derive its constraints in `src/constraints.py` first (it is a placeholder)               |
 
 ---
 

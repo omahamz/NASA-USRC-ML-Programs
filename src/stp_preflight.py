@@ -22,7 +22,7 @@ without SolidWorks:
 A point is rejected (never sent to CAD) when a column is missing / non-numeric / non-finite,
 (N, T) is not a valid configuration, a parameter lies outside PARAM_BOUNDS, CC or VC is not a
 whole number, it violates the constraints of its configuration, its configuration has no
-derived constraints yet (T = 1 placeholders), or its file name collides with an earlier row.
+derived constraints yet ((N=0, T=1) is a placeholder), or its file name collides with an earlier row.
 
 Usage:
     python src/stp_preflight.py points.csv --OD 40 --L 50 --G 3 --fidelity Shell --out batches/run1

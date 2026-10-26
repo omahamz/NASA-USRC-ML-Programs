@@ -21,6 +21,7 @@ import sample as S
 
 OD, L, G = 40.0, 50.0, 3.0
 BOTH = [(6, 0), (0, 0)]
+ALL3 = [(6, 0), (6, 1), (0, 0)]            # every configuration with derived constraints
 
 
 def feasible(df):
@@ -37,7 +38,7 @@ class TestOutputShape:
         assert list(df.columns) == ["R", "A", "CC", "VC", "T", "N"]
         assert len(df) >= 16 and (df["N"] == 6).all() and (df["T"] == 0).all()
 
-    @pytest.mark.parametrize("cfg", BOTH)
+    @pytest.mark.parametrize("cfg", ALL3)
     def test_every_sampled_point_is_feasible_for_its_configuration(self, cfg):
         df = S.generate_sobol(k=32, seed=3, OD=OD, L=L, G=G, configs=[cfg])
         assert len(df) >= 32
@@ -49,8 +50,13 @@ class TestOutputShape:
         assert len(df) == count(df, 6, 0) + count(df, 0, 0) and count(df, 6, 0) >= 16 and count(df, 0, 0) >= 16
         assert feasible(df).all()
 
+    def test_all_three_derived_configurations_at_once(self):
+        df = S.generate_sobol(k=16, seed=2, OD=OD, L=L, G=G, configs=ALL3)
+        assert min(count(df, 6, 0), count(df, 6, 1), count(df, 0, 0)) >= 16
+        assert feasible(df).all()
+
     def test_values_stay_inside_the_design_box_and_integers_are_integers(self):
-        df = S.generate_sobol(k=64, seed=4, OD=OD, L=L, G=G, configs=BOTH)
+        df = S.generate_sobol(k=64, seed=4, OD=OD, L=L, G=G, configs=ALL3)
         for col, (lo, hi) in C.PARAM_BOUNDS.items():
             assert df[col].between(lo, hi).all(), col
         assert (df["CC"] % 1 == 0).all() and (df["VC"] % 1 == 0).all()
@@ -67,7 +73,7 @@ class TestOutputShape:
 
 
 class TestPlaceholderConfigurations:
-    @pytest.mark.parametrize("cfgs", [[(0, 1)], [(6, 1)], [(6, 0), (6, 1)]])
+    @pytest.mark.parametrize("cfgs", [[(0, 1)], [(6, 0), (0, 1)], [(6, 1), (0, 1)]])
     def test_sampling_is_refused(self, cfgs):
         with pytest.raises(C.ConstraintsNotDefinedError):
             S.generate_sobol(k=8, seed=1, OD=OD, L=L, G=G, configs=cfgs)
@@ -76,13 +82,13 @@ class TestPlaceholderConfigurations:
         with pytest.raises(C.ConstraintsNotDefinedError):
             S.generate_lhs_configs(8, seed=1, configs=cfgs)
 
-    @pytest.mark.parametrize("cfg", [(6, 1), (0, 1)])
+    @pytest.mark.parametrize("cfg", [(0, 1)])
     def test_propagation_is_refused(self, cfg):
         with pytest.raises(C.ConstraintsNotDefinedError):
             S.propagate_domains(OD, L, G, cfg)
 
     def test_apply_constraints_never_silently_passes_or_drops_placeholder_rows(self):
-        df = pd.DataFrame({"R": [3.0], "A": [60], "CC": [12], "VC": [5], "T": [1], "N": [6]})
+        df = pd.DataFrame({"R": [3.0], "A": [60], "CC": [12], "VC": [5], "T": [1], "N": [0]})
         with pytest.raises(C.ConstraintsNotDefinedError):
             S.apply_constraints(df, OD, L, G)
 
@@ -91,6 +97,57 @@ class TestPlaceholderConfigurations:
         monkeypatch.setattr(sys, "argv", ["sample.py", "--sobol", "8", "--configs", "0:1"])
         with pytest.raises(SystemExit, match="have not been derived"):
             S.main()
+
+
+class TestTwistedHex:
+    def test_sampled_points_satisfy_the_twist_constraints(self):
+        df = S.generate_sobol(k=64, seed=9, OD=OD, L=L, G=G, configs=[(6, 1)])
+        assert (df["T"] == 1).all() and (df["N"] == 6).all()
+        report = C.evaluate(df, OD, L, G)
+        assert report[["C1", "C4'", "C5"]].astype(bool).all().all()
+        # ... and the constraints are not vacuous: the same stream untwisted violates C4' somewhere
+        plain = S.generate_sobol(k=64, seed=9, OD=OD, L=L, G=G, configs=[(6, 0)])
+        assert not C.C4P.satisfied(plain["R"], plain["A"], plain["CC"], plain["VC"], OD, L, G).all()
+
+    def test_a_configuration_keeps_its_stream_whichever_others_are_selected(self):
+        alone = S.generate_sobol(k=16, seed=7, OD=OD, L=L, G=G, configs=[(6, 1)])
+        together = S.generate_sobol(k=16, seed=7, OD=OD, L=L, G=G, configs=ALL3)
+        pd.testing.assert_frame_equal(together[(together["N"] == 6) & (together["T"] == 1)].reset_index(drop=True), alone)
+
+    def test_twisted_and_untwisted_streams_differ(self):
+        both = S.generate_sobol(k=32, seed=7, OD=OD, L=L, G=G, configs=[(6, 0), (6, 1)])
+        a = both[both["T"] == 0][["R", "A"]].to_numpy()
+        b = both[both["T"] == 1][["R", "A"]].to_numpy()
+        assert not np.array_equal(a, b)
+
+    def test_propagation_uses_c1_only_and_never_cuts_a_feasible_twisted_point(self):
+        """C5 loosens C3 as the tilt falls, so the twisted domains must not be tightened by C3's R / VC bounds."""
+        plain = S.propagate_domains(OD, L, G, (6, 0))
+        twisted = S.propagate_domains(OD, L, G, (6, 1))
+        assert twisted["A"] == plain["A"] == (30.0, 90.0)
+        assert twisted["CC"] == plain["CC"] and twisted["R"][1] >= plain["R"][1]
+        assert twisted["VC"] == (4, 10) and twisted["R"][1] <= C.PARAM_BOUNDS["R"][1]
+        rng = np.random.default_rng(0)
+        n = 100_000
+        pts = pd.DataFrame({"R": rng.uniform(2, 8.8, n), "A": rng.uniform(30, 90, n),
+                            "CC": rng.integers(4, 23, n), "VC": rng.integers(4, 11, n), "T": 1, "N": 6})
+        ok = pts[C.feasible_mask(pts, OD, L, G)]
+        assert len(ok) > 0
+        assert (ok["R"] <= twisted["R"][1]).all() and (ok["CC"] <= twisted["CC"][1]).all() and (ok["VC"] <= twisted["VC"][1]).all()
+        domains = {(6, 1): twisted}
+        df = S.generate_sobol(k=16, seed=3, OD=OD, L=L, G=G, domains=domains, configs=[(6, 1)])
+        assert len(df) >= 16 and feasible(df).all()
+
+    def test_resume_state_has_one_entry_per_configuration(self, tmp_path):
+        import json
+        inst = str(tmp_path / "tw")
+        first = S.generate_sobol(k=8, seed=7, instance=inst, OD=OD, L=L, G=G, configs=ALL3)
+        state = json.load(open(inst + ".sobol_state.json"))
+        assert set(state["configs"]) == {"N6_T0", "N6_T1", "N0_T0"}
+        again = S.generate_sobol(k=8, seed=7, instance=inst, OD=OD, L=L, G=G, configs=[(6, 1)])
+        assert count(again, 6, 1) >= count(first, 6, 1) + 8
+        assert count(again, 6, 0) == count(first, 6, 0) and count(again, 0, 0) == count(first, 0, 0)
+        assert feasible(again).all()
 
 
 class TestGapAndConstraintFiltering:
@@ -162,8 +219,8 @@ class TestReproducibility:
 
 
 class TestPropagation:
-    def test_hex_and_ellipse_domains_for_the_standard_case(self):
-        for cfg in BOTH:
+    def test_hex_twisted_hex_and_ellipse_domains_for_the_standard_case(self):
+        for cfg in ALL3:
             d = S.propagate_domains(OD, L, G, cfg)
             assert d["R"] == (2.0, 8.8) and d["CC"] == (4, 22) and d["VC"] == (4, 10) and d["A"] == (30.0, 90.0)
 
@@ -315,9 +372,9 @@ class TestCli:
                                           "--seed", "1", "--sobol-output", "out.csv"])
         S.main()
         df = pd.read_csv("out.csv")
-        assert list(df.columns) == ["R", "A", "CC", "VC", "T", "N"]                         # >= 8 x 2 default configs
-        assert count(df, 6, 0) >= 8 and count(df, 0, 0) >= 8
-        assert sorted(df["N"].unique()) == [0, 6] and (df["T"] == 0).all()
+        assert list(df.columns) == ["R", "A", "CC", "VC", "T", "N"]                         # >= 8 x 3 default configs
+        assert min(count(df, 6, 0), count(df, 6, 1), count(df, 0, 0)) >= 8
+        assert not ((df["T"] == 1) & (df["N"] == 0)).any()                                # (0, 1) is a placeholder
 
         out = CK.check_constraints("out.csv", G=3.0, L=50.0, OD=40.0)
         assert out is None                                           # nothing violated
@@ -339,8 +396,8 @@ class TestCli:
                                           "--subsample-output", "sub.csv"])
         S.main()
         sub = pd.read_csv("sub.csv")
-        assert len(pd.read_csv("lhs.csv")) == 40 and len(sub) == 6
-        assert sorted(sub["N"].unique()) == [0, 6]
+        assert len(pd.read_csv("lhs.csv")) == 60 and len(sub) == 6
+        assert sorted(sub["N"].unique()) == [0, 6] and sorted(sub["T"].unique()) == [0, 1]
 
 
 class TestCheckConstraintsScript:
@@ -349,18 +406,28 @@ class TestCheckConstraintsScript:
         pd.DataFrame([
             dict(R=3.0, A=60, CC=12, VC=5, T=0, N=6),          # ok
             dict(R=8.5, A=60, CC=12, VC=5, T=0, N=6),          # violates C1, C2, C3
-            dict(R=5.1, A=60, CC=12, VC=5, T=0, N=0),          # ok
-            dict(R=3.0, A=60, CC=12, VC=5, T=0, N=0),          # violates E3
-            dict(R=3.0, A=60, CC=12, VC=5, T=1, N=6),          # placeholder -> unchecked
+            dict(R=3.0, A=60, CC=12, VC=5, T=0, N=0),          # ok
+            dict(R=5.1, A=60, CC=12, VC=5, T=0, N=0),          # violates E3 (neighbouring holes overlap)
+            dict(R=3.0, A=60, CC=12, VC=5, T=1, N=0),          # (0, 1) placeholder -> unchecked
+            dict(R=3.5, A=60, CC=12, VC=10, T=1, N=6),         # violates C4' (tilt below the minimum 85.4)
+            dict(R=3.5, A=90, CC=12, VC=10, T=1, N=6),         # ok
         ]).to_csv(csv, index=False)
         out = CK.check_constraints(str(csv), G=3.0, L=50.0, OD=40.0, output_path=str(tmp_path / "v.csv"))
         text = capsys.readouterr().out
 
-        assert out["SampleRow"].tolist() == [2, 4, 5]
-        assert out["Unchecked"].tolist() == [False, False, True]
+        assert out["SampleRow"].tolist() == [2, 4, 5, 6]
+        assert out["Unchecked"].tolist() == [False, False, True, False]
         assert out.loc[out["SampleRow"] == 2, ["Violates_C1", "Violates_C2", "Violates_C3"]].iloc[0].tolist() == [True] * 3
         assert out.loc[out["SampleRow"] == 4, "Violates_E3"].iloc[0] == True        # noqa: E712
+        assert out.loc[out["SampleRow"] == 6, "Violates_C4'"].iloc[0] == True       # noqa: E712
         assert "UNCHECKED" in text and (tmp_path / "v.csv").is_file()
+
+    def test_twisted_rows_need_an_a_column(self, tmp_path, capsys):
+        csv = tmp_path / "noA.csv"
+        pd.DataFrame({"R": [3.0], "CC": [12], "VC": [5], "T": [1], "N": [6]}).to_csv(csv, index=False)
+        with pytest.raises(SystemExit):
+            CK.check_constraints(str(csv), G=3.0, L=50.0, OD=40.0)
+        assert "C4'" in capsys.readouterr().out
 
     def test_legacy_csv_without_configuration_columns(self, tmp_path, capsys):
         csv = tmp_path / "legacy.csv"
@@ -397,7 +464,7 @@ def rows_of(df, cfg):
 class TestCleanSobolStream:
     """The sample is always 'every feasible point of a power-of-2 Sobol prefix': nothing is thinned or skipped."""
 
-    @pytest.mark.parametrize("cfg", BOTH)
+    @pytest.mark.parametrize("cfg", ALL3)
     def test_a_fresh_sample_is_every_feasible_point_of_a_power_of_two_prefix(self, cfg, tmp_path):
         inst = str(tmp_path / "fresh")
         df = S.generate_sobol(k=64, seed=11, instance=inst, OD=OD, L=L, G=G, configs=[cfg])
@@ -407,11 +474,11 @@ class TestCleanSobolStream:
 
     def test_resume_extends_the_stream_to_the_next_power_of_two_without_gaps(self, tmp_path):
         inst = str(tmp_path / "grow")
-        S.generate_sobol(k=32, seed=5, instance=inst, OD=OD, L=L, G=G, configs=BOTH)
+        S.generate_sobol(k=32, seed=5, instance=inst, OD=OD, L=L, G=G, configs=ALL3)
         n1 = {k: v["num_generated"] for k, v in json.load(open(inst + ".sobol_state.json"))["configs"].items()}
-        full = S.generate_sobol(k=32, seed=5, instance=inst, OD=OD, L=L, G=G, configs=BOTH)
+        full = S.generate_sobol(k=32, seed=5, instance=inst, OD=OD, L=L, G=G, configs=ALL3)
         state = json.load(open(inst + ".sobol_state.json"))
-        for cfg in BOTH:
+        for cfg in ALL3:
             n2 = state["configs"][C.config_label(cfg)]["num_generated"]
             assert S._is_power_of_2(n2) and n2 > n1[C.config_label(cfg)]
             pd.testing.assert_frame_equal(rows_of(full, cfg), sobol_reference(5, cfg, n2), check_dtype=False)

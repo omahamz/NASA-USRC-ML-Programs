@@ -9,8 +9,8 @@ Every design point is  [R, A, CC, VC, T, N]:
 T and N are NOT extra Sobol/LHS dimensions.  Each (N, T) configuration gets its own
 4-D stream, its own geometric constraints (src/constraints.py) and its own domain
 propagation.  K always means "K points per configuration" (for Sobol: at least K, see
-generate_sobol).  Configurations without
-derived constraints (T = 1 for now) cannot be sampled.
+generate_sobol).  Configurations without derived constraints (N = 0, T = 1 for now)
+cannot be sampled.
 
 Usage:
     # Basic usage (no constraints), all sampleable configurations:
@@ -189,6 +189,11 @@ def propagate_domains(OD: float, L: float, G: float = 0.0, config: tuple[int, in
         Pass 5 - tighten VC_hi via C3.
         (C2 is not used for tightening; the sampler still enforces it row by row.)
 
+    (6, 1) - twisted hexagonal cells (constraints C1, C4', C5)
+        Only C1 is used for tightening (Pass 1).  C5 is C3 generalised for the tilt: at A = 90 it equals
+        (L-2G)/(VC+1) but it loosens as A falls, so C3's R / VC bounds would wrongly cut feasible points and are
+        NOT applied.  R_hi is clamped to the design box.  C4' and C5 depend on A and are enforced row by row.
+
     (0, 0) - ellipsoidal holes (constraints E1..E3)
         E2:  CC_hi <- min(CC_hi, floor(pi*OD / (2*R_lo)));   R_hi <- min(R_hi, pi*OD / (2*CC_lo))
         E1:  R_hi  <- min(R_hi, (L-2G) / (VC_lo+1));         VC_hi <- min(VC_hi, floor((L-2G)/R_lo - 1))
@@ -202,6 +207,8 @@ def propagate_domains(OD: float, L: float, G: float = 0.0, config: tuple[int, in
 
     if config == (6, 0):
         return _propagate_domains_hex(OD, L, G)
+    if config == (6, 1):
+        return _propagate_domains_hex(OD, L, G, label="N6_T1", twisted=True)
     if config == (0, 0):
         return _propagate_domains_ellipsoid(OD, L, G)
 
@@ -211,7 +218,7 @@ def propagate_domains(OD: float, L: float, G: float = 0.0, config: tuple[int, in
     return domains
 
 
-def _propagate_domains_hex(OD: float, L: float, G: float = 0.0) -> dict:
+def _propagate_domains_hex(OD: float, L: float, G: float = 0.0, label: str = "N6_T0", twisted: bool = False) -> dict:
     sqrt3 = math.sqrt(3)
     pi    = math.pi
 
@@ -224,6 +231,11 @@ def _propagate_domains_hex(OD: float, L: float, G: float = 0.0) -> dict:
     # ------------------------------------------------------------------
     CC_hi = min(CC_hi, math.floor(pi * OD / (sqrt3 * R_lo) - 1e-9))
     R_hi  = min(R_hi,  pi * OD / (sqrt3 * CC_lo) - 1e-9)
+
+    if twisted:                      # C5 depends on A: only C1 (and the design box) tighten the domains
+        R_hi = min(R_hi, float(PARAM_BOUNDS["R"][1]))
+        _check_domains(R_lo, R_hi, CC_lo, CC_hi, VC_lo, VC_hi)
+        return _finish_domains(label, OD, L, G, R_lo, R_hi, CC_lo, CC_hi, VC_lo, VC_hi)
 
     # ------------------------------------------------------------------
     # Pass 2: C3 tightening  VC < (L-2(R+G))/R + 1
@@ -258,7 +270,7 @@ def _propagate_domains_hex(OD: float, L: float, G: float = 0.0) -> dict:
     ))
 
     _check_domains(R_lo, R_hi, CC_lo, CC_hi, VC_lo, VC_hi)
-    return _finish_domains("N6_T0", OD, L, G, R_lo, R_hi, CC_lo, CC_hi, VC_lo, VC_hi)
+    return _finish_domains(label, OD, L, G, R_lo, R_hi, CC_lo, CC_hi, VC_lo, VC_hi)
 
 
 def _propagate_domains_ellipsoid(OD: float, L: float, G: float = 0.0) -> dict:
@@ -868,7 +880,7 @@ def parse_args():
                         help="Configurations to sample: comma separated N:T pairs (6:0,0:0) or "
                              "NxTy names (N6T0), 'all' = every configuration with derived "
                              "constraints (default), 'legacy' = 6:0. K points are drawn PER "
-                             "configuration. Placeholder configurations (T=1) are rejected.")
+                             "configuration. Placeholder configurations ((0,1) for now) are rejected.")
     # --- LHS ---
     parser.add_argument("--k", type=int, default=None,
                         help="Number of LHS points to generate per configuration.")

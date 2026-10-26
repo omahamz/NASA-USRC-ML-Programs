@@ -38,15 +38,17 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 HEX = (6, 0)
 ELLIPSE = (0, 0)
+TWIST_HEX = (6, 1)
+IMPLEMENTED = [HEX, TWIST_HEX, ELLIPSE]
 
 
 def feasible(N, T, R, A, CC, VC, OD=OD, L=L, G=G):
     return C.is_feasible(N, T, R, A, CC, VC, OD, L, G)
 
 
-# The feasible band of (0, 0) is thin: at CC=12, VC=5 only R in ~(4.99, 5.24) passes E2/E3, and that
-# band lies inside the (6, 0) region (R < 5.61), so this point is valid for both configurations.
-BOTH_FEASIBLE = dict(R=5.1, A=60.0, CC=12, VC=5)
+# A point that every implemented configuration accepts: R=3 is below all upper bounds at CC=12, VC=5
+# (E3: 4.99, E2: 5.24, C2: 5.61) and for (6, 1) Vsep = 9.5 > 2R, so C4' holds and C5 (bound 8.8 at A=60) holds too.
+BOTH_FEASIBLE = dict(R=3.0, A=60.0, CC=12, VC=5)
 
 
 # ---------------------------------------------------------------------------
@@ -62,15 +64,42 @@ def reference(N, T, R, A, CC, VC, OD=OD, L=L, G=G):
             "C2": R < (1 / VC) * (L / 2 - G) + (s3 * pi * OD / (12 * CC)) * (1 - 1 / VC),
             "C3": R < (L - 2 * G) / (VC + 1),
         }
+    if (N, T) == TWIST_HEX:
+        vs = (L - 2 * (R + G)) / (VC - 1)
+        cot = 1.0 / math.tan(math.radians(A))
+        den = vs - 2 * R
+        c4p = vs > 2 * R or (den != 0 and cot <= (-s3 * vs + 2 * s3 * R - pi * OD / (2 * CC)) / den)
+        return {
+            "C1": R < pi * OD / (s3 * CC),
+            "C4'": bool(c4p),
+            "C5": R < (L - 2 * G) / (VC - 1) / (-(cot / (s3 + cot) - 1) + 2 / (VC - 1)),
+        }
     if (N, T) == ELLIPSE:
         h = pi * OD / (2 * CC)
         vs = (L - 2 * (R + G)) / (VC - 1)
         return {
             "E1": R < (L - 2 * G) / (VC + 1),
             "E2": R < h,
-            "E3": 4 * R * R > h * h + vs * vs,
+            "E3": 4 * R * R < h * h + vs * vs,          # neighbouring holes do not overlap
         }
     raise AssertionError((N, T))
+
+
+def c4p_amin(R, CC, VC, OD=OD):
+    """Smallest A (degrees) for which C4' holds when Vsep < 2R (independent of constraints.py): cot is decreasing in A,
+    so cot(A) <= bound  <=>  A >= acot(bound) = atan2(1, bound).  nan where Vsep >= 2R (no tilt condition: > holds, = undefined)."""
+    vs = (L - 2 * (R + G)) / (VC - 1)
+    den = vs - 2 * R
+    if den >= 0:
+        return float("nan")
+    bound = (-math.sqrt(3) * vs + 2 * math.sqrt(3) * R - math.pi * OD / (2 * CC)) / den
+    return math.degrees(math.atan2(1.0, bound))
+
+
+def c5_bound(A, VC):
+    """Upper bound on R of C5 (plain math, independent of constraints.py)."""
+    cot = 1.0 / math.tan(math.radians(A))
+    return (L - 2 * G) / (VC - 1) / (-(cot / (math.sqrt(3) + cot) - 1) + 2 / (VC - 1))
 
 
 def hex_bounds(CC, VC):
@@ -83,7 +112,8 @@ def hex_bounds(CC, VC):
 
 
 def e3_root(CC, VC):
-    """R at which E3 holds with equality: 4R^2(m^2-1) + 4uR - (h^2 m^2 + u^2) = 0, m = VC-1, u = L-2G."""
+    """R at which E3 holds with equality: 4R^2(m^2-1) + 4uR - (h^2 m^2 + u^2) = 0, m = VC-1, u = L-2G.
+    E3 (non-overlap of neighbouring holes) holds for R below this root."""
     h = C.PI * OD / (2.0 * CC)
     u, m = L - 2.0 * G, VC - 1.0
     a = m * m - 1.0
@@ -91,7 +121,7 @@ def e3_root(CC, VC):
 
 
 def ellipse_bounds(CC, VC):
-    """E1 / E2 are upper bounds on R, E3 is a lower bound (R must exceed its root)."""
+    """E1, E2 and E3 are all upper bounds on R."""
     return {
         "E1": (L - 2.0 * G) / (VC + 1.0),
         "E2": C.PI * OD / (2.0 * CC),
@@ -103,18 +133,13 @@ def _grid():
     return [(CC, VC) for CC in range(4, 23) for VC in range(4, 11)]
 
 
-def _binding(name, bounds_fn, upper):
-    """(CC, VC) where `name` is the tightest of its configuration's constraints by >= 2 %."""
+def _binding(name, bounds_fn):
+    """(CC, VC) where upper bound `name` is the tightest of its configuration's bounds by >= 2 %."""
     for CC, VC in _grid():
         b = bounds_fn(CC, VC)
-        if upper:
-            others = [v for k, v in b.items() if k != name and k != "E3"]
-            lower = b.get("E3", 0.0) if name != "E3" else 0.0
-            if b[name] > 2.0 and b[name] < 0.98 * min(others) and lower < 0.98 * b[name]:
-                return CC, VC
-        else:  # E3: root well below both upper bounds
-            if b["E3"] < 0.98 * min(b["E1"], b["E2"]):
-                return CC, VC
+        others = [v for k, v in b.items() if k != name]
+        if b[name] > 2.0 and b[name] < 0.98 * min(others):
+            return CC, VC
     raise AssertionError(f"no grid point where {name} is binding")
 
 
@@ -125,49 +150,159 @@ def _binding(name, bounds_fn, upper):
 class TestBoundaries:
     @pytest.mark.parametrize("name", ["C1", "C2", "C3"])
     def test_hex_constraint_boundary(self, name):
-        CC, VC = _binding(name, hex_bounds, upper=True)
+        CC, VC = _binding(name, hex_bounds)
         b = hex_bounds(CC, VC)[name]
         assert feasible(6, 0, b * (1 - 1e-9), 60, CC, VC)
         assert not feasible(6, 0, b * (1 + 1e-9), 60, CC, VC)
         assert not feasible(6, 0, b, 60, CC, VC), "equality must be infeasible (strict inequality)"
 
-    @pytest.mark.parametrize("name", ["E1", "E2"])
-    def test_ellipse_upper_bound_boundary(self, name):
-        CC, VC = _binding(name, ellipse_bounds, upper=True)
+    def test_twisted_hex_c1_boundary(self):
+        """C1 is the only constraint shared with (6, 0): at CC = 22, VC = 4, A = 90 it binds and the others hold."""
+        b = hex_bounds(22, 4)["C1"]
+        assert feasible(6, 1, b * (1 - 1e-6), 90, 22, 4)
+        assert not feasible(6, 1, b * (1 + 1e-6), 90, 22, 4)
+        assert not feasible(6, 1, b, 90, 22, 4), "equality must be infeasible (strict inequality)"
+
+    @pytest.mark.parametrize("A, CC, VC", [(90, 4, 5), (90, 4, 8), (75, 4, 7), (75, 4, 10), (60, 4, 10)])
+    def test_vertical_packing_boundary(self, A, CC, VC):
+        """C5 is a closed-form upper bound on R; the other two constraints hold on both sides of it."""
+        b = c5_bound(A, VC)
+        assert 2 < b < C.PARAM_BOUNDS["R"][1]
+        assert feasible(6, 1, b * (1 - 1e-9), A, CC, VC)
+        assert not feasible(6, 1, b * (1 + 1e-9), A, CC, VC)
+        assert not C.C5.satisfied(b, A, CC, VC, OD, L, G)[0], "equality must be infeasible (strict inequality)"
+        assert C.C4P.satisfied(b * (1 + 1e-9), A, CC, VC, OD, L, G)[0] and C.C1.satisfied(b * (1 + 1e-9), A, CC, VC, OD, L, G)[0]
+
+    @pytest.mark.parametrize("R, CC, VC", [(3.5, 12, 10), (4.0, 8, 9), (4.0, 6, 9), (3.5, 10, 9), (3.5, 10, 10), (3.0, 16, 10)])
+    def test_tilt_boundary_of_c4p(self, R, CC, VC):
+        """Where Vsep < 2R, C4' is a lower bound on A (cot decreases with A); C1 and C5 hold around it."""
+        a_min = c4p_amin(R, CC, VC)
+        assert 30 < a_min < 90
+        for a in (a_min * (1 + 1e-9), 90):
+            assert C.C1.satisfied(R, a, CC, VC, OD, L, G)[0] and C.C5.satisfied(R, a, CC, VC, OD, L, G)[0], "premise"
+        assert feasible(6, 1, R, a_min * (1 + 1e-9), CC, VC)
+        assert not feasible(6, 1, R, a_min * (1 - 1e-9), CC, VC)
+        assert not feasible(6, 1, R, 30, CC, VC) and feasible(6, 1, R, 90, CC, VC)     # the A box limits
+
+    def test_c4p_needs_no_tilt_where_vsep_exceeds_2r(self):
+        """Vsep > 2R (the OR branch) accepts every tilt, including the 30 deg box limit."""
+        R, CC, VC = 2.5, 12, 5
+        assert (L - 2 * (R + G)) / (VC - 1) > 2 * R
+        assert all(feasible(6, 1, R, A, CC, VC) for A in (30, 45, 60, 90))
+
+    @pytest.mark.parametrize("name", ["E1", "E2", "E3"])
+    def test_ellipse_constraint_boundary(self, name):
+        CC, VC = _binding(name, ellipse_bounds)
         b = ellipse_bounds(CC, VC)[name]
         assert feasible(0, 0, b * (1 - 1e-9), 60, CC, VC)
         assert not feasible(0, 0, b * (1 + 1e-9), 60, CC, VC)
-        assert not feasible(0, 0, b, 60, CC, VC), "equality must be infeasible (strict inequality)"
+        if name != "E3":                     # E3's root is a closed-form solution, not the same floating-point expression
+            assert not feasible(0, 0, b, 60, CC, VC), "equality must be infeasible (strict inequality)"
 
-    def test_ellipse_e3_is_a_lower_bound(self):
-        """E3 rejects R that is too SMALL: rows must be spaced so neighbouring holes still overlap/touch."""
-        CC, VC = _binding("E3", ellipse_bounds, upper=False)
-        b = ellipse_bounds(CC, VC)
-        r2, upper = b["E3"], min(b["E1"], b["E2"])
-        assert not feasible(0, 0, r2 * (1 - 1e-9), 60, CC, VC)
-        assert feasible(0, 0, r2 * (1 + 1e-9), 60, CC, VC)
-        assert feasible(0, 0, 0.5 * (r2 + upper), 60, CC, VC)
-        assert not feasible(0, 0, upper * (1 + 1e-9), 60, CC, VC)
+    @pytest.mark.parametrize("CC, VC", [(4, 4), (6, 5), (12, 5), (22, 10), (8, 7)])
+    def test_e3_root_is_where_neighbouring_holes_touch(self, CC, VC):
+        R = e3_root(CC, VC)
+        h = math.pi * OD / (2 * CC)
+        vs = (L - 2 * (R + G)) / (VC - 1)
+        assert 2 * R == pytest.approx(math.hypot(h, vs), rel=1e-9)
+
+    def test_e3_means_neighbouring_holes_do_not_overlap(self):
+        """E3 holds exactly when the centres of staggered neighbours are further apart than 2R."""
+        rng = np.random.default_rng(1)
+        for _ in range(500):
+            R, CC, VC = rng.uniform(2, 8.8), int(rng.integers(4, 23)), int(rng.integers(4, 11))
+            h = math.pi * OD / (2 * CC)
+            vs = (L - 2 * (R + G)) / (VC - 1)
+            assert bool(C.E3.satisfied(R, 60, CC, VC, OD, L, G)[0]) == (2 * R < math.hypot(h, vs))
 
     def test_every_constraint_is_exercised(self):
-        """Guards the boundary tests above: each constraint must be the binding one somewhere."""
+        """Guards the boundary tests above: each upper bound must be the binding one somewhere."""
         for name in ("C1", "C2", "C3"):
-            _binding(name, hex_bounds, upper=True)
-        for name in ("E1", "E2"):
-            _binding(name, ellipse_bounds, upper=True)
-        _binding("E3", ellipse_bounds, upper=False)
+            _binding(name, hex_bounds)
+        for A, CC, VC in ((90, 4, 10), (60, 4, 10)):                 # C5 binds (see test_vertical_packing_boundary)
+            assert 2 < c5_bound(A, VC) < min(hex_bounds(CC, VC)["C1"], C.PARAM_BOUNDS["R"][1])
+        for name in ("E1", "E2", "E3"):
+            _binding(name, ellipse_bounds)
 
     def test_configurations_are_genuinely_different(self):
-        # Small R, many tight cells: fine for the hexagon set, rejected by E3 (holes too far apart).
-        assert feasible(6, 0, 2.0, 60, 22, 10)
-        assert not feasible(0, 0, 2.0, 60, 22, 10)
-        # Large R with few cells: fine for the ellipse set, rejected by the hexagon set (C2).
-        assert feasible(0, 0, 7.0, 60, 6, 5)
-        assert not feasible(6, 0, 7.0, 60, 6, 5)
+        # R just above the half pitch with many cells: fine for the hexagons, rejected by E2 (holes overlap in a row).
+        assert feasible(6, 0, 3.0, 60, 22, 4)
+        assert not feasible(0, 0, 3.0, 60, 22, 4)
+        # Many rows with a shallow tilt: fine untwisted, rejected by C4' of the twist ...
+        assert feasible(6, 0, 3.5, 60, 12, 10) and not feasible(6, 1, 3.5, 60, 12, 10)
+        # ... and fine again once the tilt is large enough (C4' needs A >= 85.40 deg here).
+        assert feasible(6, 1, 3.5, 86, 12, 10)
+        # C5 relaxes C3 for tilted cells: R = 4.5 at A = 60, CC = 4, VC = 10 breaks C3 (bound 4.0) but not C5 (bound 5.03).
+        assert not feasible(6, 0, 4.5, 60, 4, 10) and feasible(6, 1, 4.5, 60, 4, 10)
+
+    def test_the_saved_default_designs_of_the_parts_are_feasible(self):
+        """Regression for the E3 flip: the designs stored in N0AShell / N6AShell are buildable, so they must pass."""
+        assert feasible(0, 0, 4.0, 60.0, 12, 5)          # N0AShell: R=4, A=60, CC=12, VC=5
+        assert feasible(6, 0, 4.0, 90.0, 16, 5)          # N6AShell: R=4, A=90, CC=16, VC=5
+
+    def test_the_old_e3_inequality_is_gone(self):
+        """With E3 as first written (4R^2 > d^2) this point was accepted; SolidWorks cannot build it (Wrap1)."""
+        assert not feasible(0, 0, 5.1, 60.0, 12, 5)
+
+
+class TestTwistedConstraints:
+    def test_c4p_and_c5_match_the_independent_reference(self):
+        rng = np.random.default_rng(2)
+        for _ in range(2000):
+            R, A = float(rng.uniform(2, 8.8)), float(rng.uniform(30, 90))
+            CC, VC = int(rng.integers(4, 23)), int(rng.integers(4, 11))
+            ref = reference(6, 1, R, A, CC, VC)
+            assert bool(C.C4P.satisfied(R, A, CC, VC, OD, L, G)[0]) == ref["C4'"]
+            assert bool(C.C5.satisfied(R, A, CC, VC, OD, L, G)[0]) == ref["C5"]
+            assert bool(C.C1.satisfied(R, A, CC, VC, OD, L, G)[0]) == ref["C1"]
+
+    def test_c5_is_the_old_c3_at_a_right_angle_and_loosens_with_a_smaller_tilt(self):
+        rng = np.random.default_rng(5)
+        R, CC, VC = rng.uniform(2, 8.8, 5000), rng.integers(4, 23, 5000), rng.integers(4, 11, 5000)
+        assert (C.C5.satisfied(R, 90.0, CC, VC, OD, L, G) == C.C3.satisfied(R, 90.0, CC, VC, OD, L, G)).all()
+        for VC_ in range(4, 11):
+            bounds = [c5_bound(A, VC_) for A in (30, 45, 60, 75, 90)]
+            assert bounds == sorted(bounds, reverse=True) and len(set(bounds)) == 5
+            assert bounds[-1] == pytest.approx((L - 2 * G) / (VC_ + 1))
+
+    def test_vsep_equal_to_2r_is_violated_without_a_warning(self):
+        """Vsep = 2R makes the C4' ratio a division by zero (and the OR branch needs '>'): violated, silently."""
+        R, VC = 5.5, 4                                # (50 - 2*(5.5 + 3)) / 3 = 11 = 2R exactly
+        assert (L - 2 * (R + G)) / (VC - 1) == 2 * R
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert not C.C4P.satisfied(R, 90.0, 12, VC, OD, L, G)[0]
+
+    def test_a_is_required_for_twisted_rows_only(self):
+        no_a = pd.DataFrame({"R": [3.0], "CC": [12], "VC": [5]})
+        assert C.evaluate(no_a.assign(T=0, N=6), OD, L, G)["feasible"].tolist() == [True]       # (6, 0) does not need A
+        with pytest.raises(ValueError, match="C4'"):
+            C.evaluate(no_a.assign(T=1, N=6), OD, L, G)
+        assert C.C4P.uses_A and C.C5.uses_A and not C.C1.uses_A and not C.E3.uses_A
+
+    def test_twist_is_not_a_subset_of_untwisted_any_more(self):
+        """C5 loosens C3 for tilted cells, so (6, 1) accepts some designs that (6, 0) rejects - and vice versa."""
+        rng = np.random.default_rng(3)
+        n = 20000
+        df = pd.DataFrame({"R": rng.uniform(2, 8.8, n), "A": rng.uniform(30, 90, n),
+                           "CC": rng.integers(4, 23, n), "VC": rng.integers(4, 11, n)})
+        plain = C.feasible_mask(df.assign(T=0, N=6), OD, L, G)
+        twist = C.feasible_mask(df.assign(T=1, N=6), OD, L, G)
+        assert (twist & ~plain).any() and (plain & ~twist).any()
+        report = C.evaluate(df.assign(T=1, N=6), OD, L, G)
+        assert (twist == (report["C1"].astype(bool) & report["C4'"].astype(bool) & report["C5"].astype(bool))).all()
+        assert report["C2"].isna().all() and report["C3"].isna().all()
+
+    def test_tilt_decides_the_report_columns(self):
+        df = pd.DataFrame({"R": [3.5, 3.5], "A": [60, 90], "CC": [12, 12], "VC": [10, 10], "T": [1, 1], "N": [6, 6]})
+        report = C.evaluate(df, OD, L, G)
+        assert report[["C1", "C5"]].astype(bool).all().all()
+        assert report["C4'"].astype(bool).tolist() == [False, True]
+        assert report["feasible"].tolist() == [False, True]
 
 
 class TestReferenceAgreement:
-    @pytest.mark.parametrize("cfg", [HEX, ELLIPSE])
+    @pytest.mark.parametrize("cfg", [HEX, TWIST_HEX, ELLIPSE])
     def test_vectorised_matches_scalar_reference_on_dense_grid(self, cfg):
         N, T = cfg
         rows = [
@@ -175,7 +310,7 @@ class TestReferenceAgreement:
             for R in np.linspace(2.0, 8.8, 35)
             for CC in range(4, 23)
             for VC in range(4, 11)
-            for A in (30.0, 60.0, 90.0)
+            for A in (30.0, 45.0, 60.0, 75.0, 90.0)
         ]
         df = pd.DataFrame(rows)
         report = C.evaluate(df, OD, L, G)
@@ -190,21 +325,21 @@ class TestReferenceAgreement:
         assert 0.0 < report["feasible"].mean() < 1.0      # the grid really contains both outcomes
 
     def test_acceptance_rates_are_sane(self):
-        """~37 % of the design box is feasible for (6, 0) and ~6 % for (0, 0) - a coarse regression guard."""
+        """Share of the design box accepted: ~37 % (6, 0), ~34 % (6, 1), ~32 % (0, 0) - a coarse regression guard."""
         rng = np.random.default_rng(0)
         n = 200_000
         df = pd.DataFrame({
             "R": rng.uniform(2, 8.8, n), "A": rng.uniform(30, 90, n),
             "CC": rng.integers(4, 23, n), "VC": rng.integers(4, 11, n),
         })
-        hex_rate = C.feasible_mask(df.assign(T=0, N=6), OD, L, G).mean()
-        ell_rate = C.feasible_mask(df.assign(T=0, N=0), OD, L, G).mean()
-        assert 0.35 < hex_rate < 0.39
-        assert 0.05 < ell_rate < 0.07
+        rates = {cfg: C.feasible_mask(df.assign(N=cfg[0], T=cfg[1]), OD, L, G).mean() for cfg in IMPLEMENTED}
+        assert 0.35 < rates[HEX] < 0.39
+        assert 0.32 < rates[TWIST_HEX] < 0.36
+        assert 0.30 < rates[ELLIPSE] < 0.335
 
 
 class TestUndefinedArithmetic:
-    @pytest.mark.parametrize("cfg", [HEX, ELLIPSE])
+    @pytest.mark.parametrize("cfg", [HEX, TWIST_HEX, ELLIPSE])
     @pytest.mark.parametrize("column, value", [
         ("CC", 0), ("CC", -4), ("VC", 0), ("VC", -1), ("R", 0.0), ("R", -3.0),
         ("R", float("nan")), ("CC", float("nan")), ("VC", float("inf")), ("A", float("nan")),
@@ -220,16 +355,16 @@ class TestUndefinedArithmetic:
 
     def test_vc_equal_one_is_undefined_for_e3(self):
         # VC - 1 = 0 in the denominator of E3 (E1 and E2 alone would pass).
-        assert C.E1.satisfied(5.1, 60, 12, 1, OD, L, G)[0]
-        assert C.E2.satisfied(5.1, 60, 12, 1, OD, L, G)[0]
-        assert not C.E3.satisfied(5.1, 60, 12, 1, OD, L, G)[0]
-        assert not feasible(0, 0, 5.1, 60, 12, 1)
+        assert C.E1.satisfied(3.0, 60, 12, 1, OD, L, G)[0]
+        assert C.E2.satisfied(3.0, 60, 12, 1, OD, L, G)[0]
+        assert not C.E3.satisfied(3.0, 60, 12, 1, OD, L, G)[0]
+        assert not feasible(0, 0, 3.0, 60, 12, 1)
 
-    def test_negative_row_spacing_cannot_sneak_through_e3(self):
-        """(L-2(R+G)) < 0 squares to a positive number; E1 must still reject such R."""
-        R = 30.0                                     # L - 2(R+G) = -16
-        assert C.E3.satisfied(R, 60, 12, 5, OD, L, G)[0]     # E3 alone is fooled by the square ...
-        assert not feasible(0, 0, R, 60, 12, 5)              # ... the configuration as a whole is not
+    def test_rows_that_do_not_fit_are_rejected_by_e3_alone(self):
+        """(L-2(R+G)) < 0 is squared inside E3; the inequality must still reject such R without help from E1."""
+        for R in (23.0, 30.0, 100.0):                # L - 2(R+G) < 0
+            assert not C.E3.satisfied(R, 60, 12, 5, OD, L, G)[0]
+            assert not feasible(0, 0, R, 60, 12, 5)
 
     def test_a_column_is_optional(self):
         df = pd.DataFrame({"R": [3.0], "CC": [12], "VC": [5]})
@@ -271,13 +406,15 @@ class TestConfigurationRouting:
 
     def test_each_row_uses_its_own_constraint_set(self):
         df = pd.DataFrame({
-            "R": [3.0, 3.0], "A": [60, 60], "CC": [12, 12], "VC": [5, 5], "T": [0, 0], "N": [6, 0],
+            "R": [3.0, 3.0, 3.0], "A": [60, 60, 60], "CC": [12, 12, 12], "VC": [5, 5, 5],
+            "T": [0, 0, 1], "N": [6, 0, 6],
         })
         report = C.evaluate(df, OD, L, G)
-        assert report.loc[0, ["C1", "C2", "C3"]].notna().all() and report.loc[0, ["E1", "E2", "E3"]].isna().all()
-        assert report.loc[1, ["E1", "E2", "E3"]].notna().all() and report.loc[1, ["C1", "C2", "C3"]].isna().all()
+        assert report.loc[0, ["C1", "C2", "C3"]].notna().all() and report.loc[0, ["C4'", "C5", "E1", "E2", "E3"]].isna().all()
+        assert report.loc[1, ["E1", "E2", "E3"]].notna().all() and report.loc[1, ["C1", "C2", "C3", "C4'", "C5"]].isna().all()
+        assert report.loc[2, ["C1", "C4'", "C5"]].notna().all() and report.loc[2, ["C2", "C3", "E1", "E2", "E3"]].isna().all()
 
-    @pytest.mark.parametrize("cfg", [(6, 1), (0, 1)])
+    @pytest.mark.parametrize("cfg", [(0, 1)])
     def test_placeholder_configurations_are_undefined_and_never_feasible(self, cfg):
         df = pd.DataFrame({"R": [3.0], "A": [60], "CC": [12], "VC": [5], "T": [cfg[1]], "N": [cfg[0]]})
         report = C.evaluate(df, OD, L, G)
@@ -288,7 +425,7 @@ class TestConfigurationRouting:
         assert issubclass(C.ConstraintsNotDefinedError, NotImplementedError)
 
     def test_only_derived_configurations_are_implemented(self):
-        assert C.implemented_configs() == [(6, 0), (0, 0)]
+        assert C.implemented_configs() == [(6, 0), (6, 1), (0, 0)]
 
     @pytest.mark.parametrize("column, value", [("N", 3), ("N", 8), ("T", 2), ("T", -1), ("N", float("nan")), ("T", "x")])
     def test_invalid_configuration_values_raise(self, column, value):
@@ -314,8 +451,10 @@ class TestConfigurationRouting:
 
 class TestParseConfigs:
     @pytest.mark.parametrize("spec, expected", [
-        ("all", [(6, 0), (0, 0)]),
+        ("all", [(6, 0), (6, 1), (0, 0)]),
         ("legacy", [(6, 0)]),
+        ("6:1", [(6, 1)]),
+        ("N6T1,N0T0", [(6, 1), (0, 0)]),
         ("6:0,0:0", [(6, 0), (0, 0)]),
         ("N0T0,N6T0", [(0, 0), (6, 0)]),
         ("n6_t0", [(6, 0)]),
@@ -325,7 +464,7 @@ class TestParseConfigs:
     def test_valid_specs(self, spec, expected):
         assert C.parse_configs(spec) == expected
 
-    @pytest.mark.parametrize("spec", ["0:1", "6:1", "N6T1", "all,0:1"])
+    @pytest.mark.parametrize("spec", ["0:1", "N0T1", "all,0:1", "6:1,0:1"])
     def test_placeholders_are_rejected(self, spec):
         with pytest.raises(C.ConstraintsNotDefinedError):
             C.parse_configs(spec)
@@ -355,14 +494,15 @@ def reasons_of(result, row):
 
 class TestPreflight:
     def test_accepts_feasible_points_and_names_them(self):
-        df = pd.DataFrame([GOOD_HEX, dict(BOTH_FEASIBLE, T=0, N=0)])
+        df = pd.DataFrame([GOOD_HEX, dict(BOTH_FEASIBLE, T=0, N=0), dict(BOTH_FEASIBLE, T=1, N=6)])
         res = P.preflight(df, OD, L, G, "Shell")
         assert res.rejected.empty
-        assert res.accepted["row"].tolist() == [1, 2]
-        assert res.accepted["part"].tolist() == ["N6AShell.SLDPRT", "N0AShell.SLDPRT"]
+        assert res.accepted["row"].tolist() == [1, 2, 3]
+        assert res.accepted["part"].tolist() == ["N6AShell.SLDPRT", "N0AShell.SLDPRT", "N6TAShell.SLDPRT"]
         assert res.accepted["stem"].tolist() == [
             "N6AShellR341A4751CC800VC900",
-            "N0AShellR510A6000CC1200VC500",
+            "N0AShellR300A6000CC1200VC500",
+            "N6TAShellR300A6000CC1200VC500",
         ]
 
     def test_fidelity_changes_the_part_and_the_stem(self):
@@ -416,16 +556,21 @@ class TestPreflight:
 
     def test_constraint_violations_name_the_violated_constraints(self):
         res = P.preflight(frame(dict(R=8.5, CC=12, VC=5),                   # hex: above all three bounds
-                                dict(R=5.1, CC=12, VC=5, N=0),              # ellipse: inside the thin feasible band
-                                dict(R=5.3, CC=12, VC=5, N=0),              # ellipse: R >= E2 bound (5.24) only
-                                dict(R=3.0, CC=12, VC=5, N=0)),             # ellipse: too small for E3 only
+                                dict(R=3.0, CC=12, VC=5, N=0),              # ellipse: fine
+                                dict(R=3.0, CC=22, VC=4, N=0),              # ellipse: R >= the half pitch 2.86 (E2) only
+                                dict(R=5.1, CC=12, VC=5, N=0),              # ellipse: neighbouring holes overlap (E3) only
+                                dict(R=3.5, A=60.0, CC=12, VC=10, N=6, T=1),  # twisted hex: tilt below C4's minimum (85.4) only
+                                dict(R=3.5, A=90.0, CC=12, VC=10, N=6, T=1),  # twisted hex: tilt large enough
+                                dict(R=6.0, A=90.0, CC=4, VC=10, N=6, T=1)),  # twisted hex: R above the vertical-packing bound (C5)
                           OD, L, G)
-        assert res.accepted["row"].tolist() == [2]
+        assert res.accepted["row"].tolist() == [2, 6]
         assert reasons_of(res, 1) == "violates C1, C2, C3"
         assert reasons_of(res, 3) == "violates E2"
         assert reasons_of(res, 4) == "violates E3"
+        assert reasons_of(res, 5) == "violates C4'"
+        assert reasons_of(res, 7) == "violates C5"
 
-    @pytest.mark.parametrize("cfg", [(6, 1), (0, 1)])
+    @pytest.mark.parametrize("cfg", [(0, 1)])
     def test_placeholder_configurations_never_reach_cad(self, cfg):
         res = P.preflight(frame(dict(N=cfg[0], T=cfg[1])), OD, L, G)
         assert res.accepted.empty
@@ -441,11 +586,13 @@ class TestPreflight:
         assert "collides with row 1" in reasons_of(res, 5)      # 3.406 -> 341 == GOOD_HEX's 3.41 -> 341
 
     def test_same_point_in_different_configurations_gets_distinct_stems(self):
-        # A point feasible in both sets, so only the naming rule decides: the configuration is in the stem.
-        assert feasible(6, 0, **BOTH_FEASIBLE) and feasible(0, 0, **BOTH_FEASIBLE)
-        res = P.preflight(pd.DataFrame([dict(BOTH_FEASIBLE, T=0, N=6), dict(BOTH_FEASIBLE, T=0, N=0)]), OD, L, G)
+        # A point feasible in every implemented set, so only the naming rule decides: the configuration is in the stem.
+        assert all(feasible(N, T, **BOTH_FEASIBLE) for N, T in IMPLEMENTED)
+        res = P.preflight(pd.DataFrame([dict(BOTH_FEASIBLE, T=0, N=6), dict(BOTH_FEASIBLE, T=0, N=0),
+                                        dict(BOTH_FEASIBLE, T=1, N=6)]), OD, L, G)
         assert res.rejected.empty
-        assert res.accepted["stem"].tolist() == ["N6AShellR510A6000CC1200VC500", "N0AShellR510A6000CC1200VC500"]
+        assert res.accepted["stem"].tolist() == ["N6AShellR300A6000CC1200VC500", "N0AShellR300A6000CC1200VC500",
+                                                  "N6TAShellR300A6000CC1200VC500"]
 
     def test_row_numbers_are_one_based_and_survive_rejections(self):
         df = frame({}, dict(CC=12.5), {}, dict(R=0.5), dict(R=3.0, A=61.0, CC=12, VC=5))
@@ -477,7 +624,8 @@ class TestPreflight:
         assert len(res.accepted) > 0 and len(res.rejected) > 0
         assert len(res.accepted) + len(res.rejected) == n
         assert C.feasible_mask(res.accepted[["R", "A", "CC", "VC", "T", "N"]], OD, L, G).all()
-        assert (res.accepted["T"] == 0).all()                       # T = 1 is never accepted
+        twisted = res.accepted[res.accepted["T"] == 1]
+        assert len(twisted) > 0 and (twisted["N"] == 6).all()        # only (6, 1) is derived; (0, 1) is never accepted
         assert res.accepted["stem"].is_unique
 
 
@@ -537,11 +685,11 @@ class TestSwGenHandOff:
 
 class TestSamplerFeedsPreflight:
     def test_every_sampled_point_passes_preflight(self):
-        df = S.generate_sobol(k=32, seed=11, OD=OD, L=L, G=G, configs=[(6, 0), (0, 0)])
+        df = S.generate_sobol(k=32, seed=11, OD=OD, L=L, G=G, configs=IMPLEMENTED)
         res = P.preflight(df, OD, L, G)
         assert res.rejected.empty, res.rejected.to_string()
         assert len(res.accepted) == len(df) and res.accepted["stem"].is_unique
-        assert set(res.accepted["part"]) == {"N6AShell.SLDPRT", "N0AShell.SLDPRT"}
+        assert set(res.accepted["part"]) == {"N6AShell.SLDPRT", "N6TAShell.SLDPRT", "N0AShell.SLDPRT"}
 
 
 # ---------------------------------------------------------------------------

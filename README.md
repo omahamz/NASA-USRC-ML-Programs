@@ -114,11 +114,12 @@ The v2 training-data plan (counts, seeds, HF selection, SwGen commands) is in
 | Configuration | Constraints | Box acceptance |
 |---|---|---|
 | `(N=6, T=0)` | `C1`–`C3` | ~37 % |
-| `(N=0, T=0)` | `E1`–`E3` | ~6 % |
-| `(N=6, T=1)`, `(N=0, T=1)` | placeholders, not derived yet: never sampled, rejected by the pre-flight | – |
+| `(N=6, T=1)` | `C1`, `C4'` (tilt / `Vsep`) and `C5` (vertical packing); C4' and C5 are the only constraints that use `A` | ~34 % |
+| `(N=0, T=0)` | `E1`–`E3` | ~32 % |
+| `(N=0, T=1)` | placeholder, not derived yet: never sampled, rejected by the pre-flight | – |
 
 ```bash
-python src/sample.py --sobol 256 --OD 40 --L 50 --G 3 --seed 42 --propagate          # (6,0) and (0,0)
+python src/sample.py --sobol 256 --OD 40 --L 50 --G 3 --seed 42 --propagate          # (6,0), (6,1) and (0,0)
 python src/sample.py --sobol 256 --OD 40 --L 50 --G 3 --configs 0:0 --sobol-instance Sample_N0   # one family, resumable
 python src/check_constraints.py Sample_N0.csv --OD 40 --L 50 --G 3                    # verify a sample
 python src/stp_preflight.py Sample_N0.csv --OD 40 --L 50 --G 3 --out batches/run1    # split for SwGen

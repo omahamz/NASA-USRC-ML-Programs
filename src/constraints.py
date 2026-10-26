@@ -20,10 +20,22 @@ strict, so a point exactly on a boundary is infeasible)
 
 (0, 0)   E1   R < (L - 2G) / (VC + 1)
          E2   R < pi*OD / (2*CC)
-         E3   4R^2 > (pi*OD / (2*CC))^2 + ((L - 2(R + G)) / (VC - 1))^2
+         E3   4R^2 < (pi*OD / (2*CC))^2 + ((L - 2(R + G)) / (VC - 1))^2
 
-(6, 1)   PLACEHOLDER - constraints not derived yet
+(6, 1)   C1   as (6, 0)
+         C4'  cot(A) <= (-sqrt(3)*Vsep + 2*sqrt(3)*R - pi*OD/(2*CC)) / (Vsep - 2R)   OR   Vsep > 2R
+              Vsep = (L - 2(R + G)) / (VC - 1)           (A in degrees; Vsep = 2R makes the ratio undefined -> violated)
+         C5   R < (L - 2G)/(VC - 1) * 1 / ( -(cot(A)/(sqrt(3) + cot(A)) - 1) + 2/(VC - 1) )      (vertical packing)
+              (at A = 90 deg C5 is exactly the old C3, R < (L - 2G)/(VC + 1); it loosens as A decreases)
+         C2, C3 and the old minimum-tilt C4 (A > arctan((v + 2R)/((4*sqrt(3)/3)*v - 2*sqrt(3)*R))) no longer apply to
+         (6, 1) (2026-10-16): the rebuild sweep showed them conservative.  C4' replaces the old C4; C5 replaces C3.
+
 (0, 1)   PLACEHOLDER - constraints not derived yet
+
+E3 history: it was first written with ">" (neighbouring holes must overlap).  Real SolidWorks rebuilds of
+N0AShell.SLDPRT showed the opposite (see tests/ and src/validate_constraints.py): with ">" the set accepted no
+buildable design; with "<" (neighbouring holes do not overlap) every point accepted by E1+E2+E3 built.  It was
+flipped on 2026-09-30.  With the flip all of E1, E2, E3 are upper bounds on R.
 
 Placeholder configurations are registered (so they are visible and easy to fill
 in) but are treated as *undefined*: they are never sampled and never pass the
@@ -34,8 +46,9 @@ Domain guard (not one of the derived inequalities)
 --------------------------------------------------
 A row is violated by *every* constraint of its set when R, CC, VC (and A, when
 present) are not all finite, or when R, CC or VC is <= 0.  E3 additionally needs
-VC > 1 (it divides by VC - 1).  Undefined arithmetic therefore reads as
-"violated" and never raises.
+VC > 1 (E3, C4' and C5 divide by VC - 1) and C4' needs Vsep != 2R.  Undefined
+arithmetic therefore reads as "violated" and never raises.  C4' and C5 are the
+only constraints that use A; evaluating a (6, 1) row without an A column is an error.
 """
 
 from __future__ import annotations
@@ -84,67 +97,91 @@ class ConstraintsNotDefinedError(NotImplementedError):
 
 @dataclass(frozen=True)
 class Constraint:
-    """One inequality.  ``fn`` returns True where the constraint is satisfied."""
+    """One inequality.  ``fn(R, A, CC, VC, OD, L, G)`` returns True where the constraint is satisfied."""
 
     name: str
     expr: str
     fn: Callable
+    uses_A: bool = False        # True for constraints that depend on the angle A (an A column is then required)
 
     def satisfied(self, R, A, CC, VC, OD: float, L: float, G: float) -> np.ndarray:
         """Vectorised check with the domain guard applied (see module docstring)."""
+        if self.uses_A and A is None:
+            raise ValueError(f"Constraint {self.name} depends on A, but no A values were supplied.")
         R  = np.atleast_1d(np.asarray(R,  dtype=float))
         CC = np.atleast_1d(np.asarray(CC, dtype=float))
         VC = np.atleast_1d(np.asarray(VC, dtype=float))
+        if A is not None:
+            A = np.atleast_1d(np.asarray(A, dtype=float))
         with np.errstate(all="ignore"):
             guard = (
                 np.isfinite(R) & np.isfinite(CC) & np.isfinite(VC)
                 & (R > 0) & (CC > 0) & (VC > 0)
             )
             if A is not None:
-                guard &= np.isfinite(np.atleast_1d(np.asarray(A, dtype=float)))
-            return np.asarray(self.fn(R, CC, VC, OD, L, G), dtype=bool) & guard
+                guard &= np.isfinite(A)
+            return np.asarray(self.fn(R, A, CC, VC, OD, L, G), dtype=bool) & guard
 
 
-def _c1(R, CC, VC, OD, L, G):
+def _c1(R, A, CC, VC, OD, L, G):
     return R < PI * OD / (SQRT3 * CC)
 
 
-def _c2(R, CC, VC, OD, L, G):
+def _c2(R, A, CC, VC, OD, L, G):
     return R < (1.0 / VC) * (L / 2.0 - G) + (SQRT3 * PI * OD / (12.0 * CC)) * (1.0 - 1.0 / VC)
 
 
-def _c3(R, CC, VC, OD, L, G):
+def _c3(R, A, CC, VC, OD, L, G):
     return R < (L - 2.0 * G) / (VC + 1.0)
 
 
-def _e2(R, CC, VC, OD, L, G):
+def _e2(R, A, CC, VC, OD, L, G):
     return R < PI * OD / (2.0 * CC)
 
 
-def _e3(R, CC, VC, OD, L, G):
+def _e3(R, A, CC, VC, OD, L, G):
     h  = PI * OD / (2.0 * CC)
     vs = (L - 2.0 * (R + G)) / (VC - 1.0)
-    return (VC > 1) & (4.0 * R ** 2 > h ** 2 + vs ** 2)
+    return (VC > 1) & (4.0 * R ** 2 < h ** 2 + vs ** 2)          # neighbouring holes do not overlap
+
+
+def _cot_deg(A):
+    """cot(A) for A in degrees (A = 90 -> ~0; A = 0 or 180 -> +-inf, which the callers treat as violated)."""
+    return 1.0 / np.tan(np.radians(A))
+
+
+def _c4p(R, A, CC, VC, OD, L, G):
+    """Twisted hex, replaces the minimum tilt:  cot(A) <= (-sqrt3*Vsep + 2*sqrt3*R - pi*OD/(2CC)) / (Vsep - 2R)  OR  Vsep > 2R."""
+    vsep = (L - 2.0 * (R + G)) / (VC - 1.0)
+    den  = vsep - 2.0 * R
+    cot  = _cot_deg(A)
+    bound = (-SQRT3 * vsep + 2.0 * SQRT3 * R - PI * OD / (2.0 * CC)) / den
+    return (VC > 1) & ((vsep > 2.0 * R) | ((den != 0) & (cot <= bound)))
+
+
+def _c5(R, A, CC, VC, OD, L, G):
+    """Twisted hex, vertical packing:  R < (L-2G)/(VC-1) / ( 1 - cot(A)/(sqrt3 + cot(A)) + 2/(VC-1) )."""
+    cot = _cot_deg(A)
+    den = -(cot / (SQRT3 + cot) - 1.0) + 2.0 / (VC - 1.0)
+    return (VC > 1) & (den > 0) & (R < (L - 2.0 * G) / (VC - 1.0) / den)
 
 
 C1 = Constraint("C1", "R < pi*OD/(sqrt(3)*CC)", _c1)
 C2 = Constraint("C2", "R < (1/VC)(L/2-G) + (sqrt(3)*pi*OD/(12*CC))(1-1/VC)", _c2)
 C3 = Constraint("C3", "R < (L-2G)/(VC+1)", _c3)
 
-# OPEN ISSUE (checked against SolidWorks on 2026-09-29, `python src/validate_constraints.py compare ...`):
-# on 120 random design-box points built from N0AShell.SLDPRT, E1+E2+E3 exactly as specified accepted 7 points and
-# none of them rebuilt, while all 37 points that do rebuild were rejected (every one of them violates E3).  With E3's
-# inequality reversed (4R^2 < d^2, i.e. neighbouring holes do not overlap) and E1 dropped, 119/120 agree.  E1 also
-# rejects 6 of the 37 buildable points.  The code below still implements the constraints as specified.
 E1 = Constraint("E1", "R < (L-2G)/(VC+1)", _c3)
 E2 = Constraint("E2", "R < pi*OD/(2*CC)", _e2)
-E3 = Constraint("E3", "4R^2 > (pi*OD/(2*CC))^2 + ((L-2(R+G))/(VC-1))^2", _e3)
+E3 = Constraint("E3", "4R^2 < (pi*OD/(2*CC))^2 + ((L-2(R+G))/(VC-1))^2", _e3)
+
+C4P = Constraint("C4'", "cot(A) <= (-sqrt(3)*Vsep + 2*sqrt(3)*R - pi*OD/(2*CC))/(Vsep - 2R)  OR  Vsep > 2R,  Vsep = (L-2(R+G))/(VC-1)", _c4p, uses_A=True)
+C5 = Constraint("C5", "R < (L-2G)/(VC-1) / (1 - cot(A)/(sqrt(3)+cot(A)) + 2/(VC-1))", _c5, uses_A=True)
 
 # (N, T) -> constraints.  None = PLACEHOLDER (not derived yet).
 CONSTRAINT_SETS: dict[tuple[int, int], tuple[Constraint, ...] | None] = {
     (6, 0): (C1, C2, C3),
     (0, 0): (E1, E2, E3),
-    (6, 1): None,   # TODO: derive the twisted-hexagon constraints
+    (6, 1): (C1, C4P, C5),
     (0, 1): None,   # TODO: derive the twisted-ellipsoid constraints
 }
 
@@ -282,7 +319,7 @@ def evaluate(df: pd.DataFrame, OD: float, L: float, G: float = 0.0) -> pd.DataFr
 
     Returns a frame indexed like ``df`` with
         N, T      integer configuration
-        <name>    one nullable-boolean column per constraint (C1..C3, E1..E3):
+        <name>    one nullable-boolean column per constraint (C1, C2, C3, C4', C5, E1, E2, E3):
                   True = satisfied, False = violated, <NA> = not applicable to the row
         defined   False for placeholder configurations (constraints not derived)
         feasible  True only if the configuration is defined and every applicable

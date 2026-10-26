@@ -45,7 +45,7 @@ class TestCompare:
         assert rep["false_accepts"] == [] and rep["false_rejects"] == []
 
     def test_a_reversed_inequality_is_visible_in_the_report(self, tmp_path):
-        """If SolidWorks builds exactly when E1 and E2 hold but E3 does NOT, E3 as written is backwards."""
+        """If SolidWorks builds exactly when E1 and E2 hold but E3 does NOT, E3 is backwards (as it once was)."""
         pts = V.random_box_points(600, seed=2)
         built = sat(C.E1, pts) & sat(C.E2, pts) & ~sat(C.E3, pts)
         rep = V.compare(write_results(tmp_path, pts, built), (0, 0), OD, L, G)
@@ -89,6 +89,17 @@ class TestCompare:
         empty.write_text("")
         with pytest.raises(ValueError):
             V.compare(str(empty), (0, 0), OD, L, G)
+
+    def test_twisted_hex_report_lists_the_tilt_constraint(self, tmp_path):
+        pts = V.random_box_points(300, seed=11)
+        accepted = C.feasible_mask(pts.assign(T=1, N=6), OD, L, G).to_numpy()
+        rep = V.compare(write_results(tmp_path, pts, accepted), (6, 1), OD, L, G)
+        assert set(rep["per_constraint"]) == {"C1", "C4'", "C5"}
+        assert rep["agreement"] == rep["n"] == 300
+        # if reality ignores the tilt, C4' shows up as rejecting buildable designs
+        built = C.feasible_mask(pts.assign(T=0, N=6), OD, L, G).to_numpy()
+        rep2 = V.compare(write_results(tmp_path, pts, built), (6, 1), OD, L, G)
+        assert rep2["per_constraint"]["C4'"]["violated_by_built"] > 0
 
     def test_placeholder_configurations_cannot_be_compared(self, tmp_path):
         path = write_results(tmp_path, V.random_box_points(5, seed=7), [True] * 5)

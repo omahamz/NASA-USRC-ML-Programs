@@ -71,8 +71,12 @@ and `...Solid`) with its own geometric feasibility rules, defined in `src/constr
 | Config | Constraints | Share of the (R, A, CC, VC) box |
 |---|---|---|
 | (6, 0) | C1 `R < π·OD/(√3·CC)` · C2 `R < (1/VC)(L/2−G) + (√3·π·OD/(12·CC))(1−1/VC)` · C3 `R < (L−2G)/(VC+1)` | ~37 % |
-| (0, 0) | E1 `R < (L−2G)/(VC+1)` · E2 `R < π·OD/(2·CC)` · E3 `4R² > (π·OD/(2·CC))² + ((L−2(R+G))/(VC−1))²` | ~6 % |
-| (6, 1), (0, 1) | placeholders — constraints not derived yet; never sampled, rejected by the STP pre-flight | – |
+| (6, 1) | C1 as (6, 0) · C4′ `cot(A) ≤ (−√3·Vsep + 2√3·R − π·OD/(2·CC))/(Vsep − 2R)` **or** `Vsep > 2R`, `Vsep = (L−2(R+G))/(VC−1)` · C5 `R < (L−2G)/(VC−1) / (1 − cot(A)/(√3+cot(A)) + 2/(VC−1))` (vertical packing; equals C3 at A = 90°); A in degrees | ~34 % |
+| (0, 0) | E1 `R < (L−2G)/(VC+1)` · E2 `R < π·OD/(2·CC)` · E3 `4R² < (π·OD/(2·CC))² + ((L−2(R+G))/(VC−1))²` | ~32 % |
+| (0, 1) | placeholder — constraints not derived yet; never sampled, rejected by the STP pre-flight | – |
+
+E3 was first written with `>`; real SolidWorks rebuilds of `N0AShell` showed that every design it accepted failed to
+build, so it was flipped to `<` (neighbouring holes must not overlap) on 2026-09-30.
 
 C2 is the earlier `VC < [L−2(G+R)]/|2R−√3·π·OD/(6·CC)| + 1` solved for R. The closed form drops the
 `|2R − a|` branch and therefore admits ~0.04 % more of the box (CC ≈ 4, small R, VC 9–10). C1 and C3 are

@@ -59,7 +59,11 @@ def check_constraints(
     if absent:
         print(f"NOTE: column(s) {absent} absent - treating those rows as the legacy (N=6, T=0) configuration.")
 
-    report = evaluate(df, OD=OD, L=L, G=G)
+    try:
+        report = evaluate(df, OD=OD, L=L, G=G)
+    except ValueError as exc:                    # e.g. a (N=6, T=1) row but no A column (C4' and C5 need A)
+        print(f"ERROR: {exc}")
+        sys.exit(1)
 
     # 1-based row index matching the original sample order
     df.insert(0, "SampleRow", range(1, len(df) + 1))
@@ -134,10 +138,13 @@ def main() -> None:
             "(N=6, T=0)  C1: R < pi*OD/(sqrt(3)*CC)\n"
             "            C2: R < (1/VC)(L/2-G) + (sqrt(3)*pi*OD/(12*CC))(1-1/VC)\n"
             "            C3: R < (L-2G)/(VC+1)\n"
+            "(N=6, T=1)  C1 as above, plus (Vsep = (L-2(R+G))/(VC-1), A = twist angle in degrees)\n"
+            "            C4': cot(A) <= (-sqrt(3)*Vsep + 2*sqrt(3)*R - pi*OD/(2*CC))/(Vsep - 2R)  OR  Vsep > 2R\n"
+            "            C5: R < (L-2G)/(VC-1) / (1 - cot(A)/(sqrt(3)+cot(A)) + 2/(VC-1))   (vertical packing)\n"
             "(N=0, T=0)  E1: R < (L-2G)/(VC+1)\n"
             "            E2: R < pi*OD/(2*CC)\n"
-            "            E3: 4R^2 > (pi*OD/(2*CC))^2 + ((L-2(R+G))/(VC-1))^2\n"
-            "(T=1)       placeholder - constraints not derived yet (rows are UNCHECKED)\n\n"
+            "            E3: 4R^2 < (pi*OD/(2*CC))^2 + ((L-2(R+G))/(VC-1))^2\n"
+            "(N=0, T=1)  placeholder - constraints not derived yet (rows are UNCHECKED)\n\n"
             "Columns N and T are optional; without them every row is treated as (N=6, T=0)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
